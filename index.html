@@ -1,0 +1,1873 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>3D Maze Game (fixed)</title>
+  <style>
+    html, body { 
+      margin: 0; 
+      height: 100%; 
+      overflow: hidden; 
+      background: radial-gradient(ellipse at 30% 40%, #1a0a2e 0%, #0f0520 40%, #050208 100%);
+    }
+    body::before {
+      content: '';
+      position: fixed;
+      width: 100%;
+      height: 100%;
+      background-image: 
+        radial-gradient(2px 2px at 20% 30%, white, transparent),
+        radial-gradient(2px 2px at 60% 70%, white, transparent),
+        radial-gradient(1px 1px at 50% 50%, white, transparent),
+        radial-gradient(1px 1px at 80% 10%, white, transparent),
+        radial-gradient(2px 2px at 90% 60%, white, transparent),
+        radial-gradient(1px 1px at 33% 80%, white, transparent),
+        radial-gradient(1px 1px at 15% 60%, white, transparent);
+      background-size: 200% 200%, 200% 200%, 300% 300%, 250% 250%, 200% 200%, 280% 280%, 220% 220%;
+      background-position: 0% 0%, 40% 60%, 50% 50%, 80% 10%, 90% 60%, 33% 80%, 15% 60%;
+      opacity: 0.4;
+      pointer-events: none;
+    }
+    canvas { display: block; width: 100vw; height: 100vh; cursor: none; }
+    #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+    #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(0, 255, 100, 0.6); box-shadow: 0 0 4px rgba(0, 255, 100, 0.8); }
+    #crosshair::before { width: 2px; height: 12px; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+    #crosshair::after { width: 12px; height: 2px; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+    #crosshair .dot { position: absolute; width: 3px; height: 3px; background: rgba(0, 255, 100, 0.8); border-radius: 50%; left: 50%; top: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 3px rgba(0, 255, 100, 1); }
+    #ui { position: absolute; top: 10px; left: 10px; color: #fff; font-family: monospace; font-size: 16px; text-shadow: 2px 2px 6px #000; }
+    #timer { position: absolute; top: 10px; right: 10px; color: #0f0; font-family: monospace; font-size: 24px; text-shadow: 2px 2px 6px #000; }
+    #leaderboard { position: absolute; top: 45px; right: 10px; color: #0f0; font-family: monospace; font-size: 14px; text-shadow: 1px 1px 3px #000; background: rgba(0,0,0,0.7); padding: 10px; border: 1px solid #0f0; }
+    #sprintBar { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 200px; height: 20px; background: rgba(0,0,0,0.7); border: 2px solid #ff0; }
+    #sprintFill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff0 0%, #cc0 100%); transition: width 0.1s; }
+    #laserBar { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%); width: 200px; height: 20px; background: rgba(0,0,0,0.7); border: 2px solid #0f0; }
+    #laserFill { height: 100%; width: 100%; background: linear-gradient(90deg, #0f0 0%, #0a0 100%); transition: width 0.1s; }
+    #debug { position: absolute; top: 10px; right: 10px; color: #0f0; font-family: monospace; font-size: 12px; text-shadow: 1px 1px 3px #000; background: rgba(0,0,0,0.5); padding: 10px; white-space: pre; }
+    #win { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0f0; font-family: monospace; font-size: 48px; display: none; text-shadow: 2px 2px 10px #000; text-align: center; }
+    #resetPrompt { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 30px; color: #fff; font-family: monospace; font-size: 20px; display: none; text-align: center; border: 2px solid #0f0; }
+    #gameOver { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #f00; font-family: monospace; font-size: 48px; display: none; text-shadow: 2px 2px 10px #000; text-align: center; z-index: 100; }
+    #lives { position: absolute; top: 50px; left: 10px; color: #f00; font-family: monospace; font-size: 18px; text-shadow: 2px 2px 6px #000; }
+    canvas.grayscale { filter: grayscale(100%); transition: filter 2s; }
+    #damageFlash { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 0, 0, 0); pointer-events: none; z-index: 50; transition: background 0.1s; }
+    #damageFlash.active { background: rgba(255, 0, 0, 0.4); }
+    #dangerVignette { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 40; opacity: 0; transition: opacity 0.3s; box-shadow: inset 0 0 150px rgba(255, 0, 0, 0.8); }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="damageFlash"></div>
+<div id="dangerVignette"></div>
+<div id="crosshair"><div class="dot"></div></div>
+<div id="ui">
+  <div>Level: <span id="level">1</span> | WASD: Move | Shift: Sprint | <span id="climbHint" style="display:none;">W+Look Up: Climb | </span>Mouse: Look | Click: Shoot</div>
+  <div>Balloons: <span id="balloons">0</span> | Cubes: <span id="cubes">0</span></div>
+</div>
+<div id="lives" style="display:none;">Lives: ❤❤❤</div>
+<div id="timer">0:00.0</div>
+<div id="leaderboard"><div style="text-align: center; margin-bottom: 5px;">TOP TIMES</div></div>
+<div id="sprintBar"><div id="sprintFill"></div></div>
+<div id="laserBar"><div id="laserFill"></div></div>
+<div id="debug"></div>
+<div id="win">YOU WIN!<br><span style="font-size: 20px; color: #aaa;">Press R to reset</span></div>
+<div id="gameOver">GAME OVER<br><span style="font-size: 20px; color: #aaa;">Press R to reset</span></div>
+<div id="resetPrompt">Reset maze?<br><span style="font-size: 14px; color: #aaa;">R to reset | Click to resume</span></div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("canvas");
+  const gl = canvas.getContext("webgl", { antialias: true });
+  if (!gl) { document.body.innerHTML = "<pre>WebGL not available.</pre>"; return; }
+
+  // ---------- Resize ----------
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w; canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+  window.addEventListener("resize", resize);
+
+  // ---------- GL helpers ----------
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(s);
+      gl.deleteShader(s);
+      throw new Error(log);
+    }
+    return s;
+  }
+  function link(vs, fs) {
+    const p = gl.createProgram();
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      const log = gl.getProgramInfoLog(p);
+      gl.deleteProgram(p);
+      throw new Error(log);
+    }
+    return p;
+  }
+
+  // ---------- Math (column-major, WebGL-friendly) ----------
+  function mat4Identity() {
+    return new Float32Array([ 1,0,0,0,  0,1,0,0,  0,0,1,0,  0,0,0,1 ]);
+  }
+  function mat4Mul(a, b) { // out = a*b
+    const out = new Float32Array(16);
+    for (let c = 0; c < 4; c++) {
+      for (let r = 0; r < 4; r++) {
+        out[c*4 + r] =
+          a[0*4 + r] * b[c*4 + 0] +
+          a[1*4 + r] * b[c*4 + 1] +
+          a[2*4 + r] * b[c*4 + 2] +
+          a[3*4 + r] * b[c*4 + 3];
+      }
+    }
+    return out;
+  }
+  function mat4Translate(x,y,z) {
+    const m = mat4Identity();
+    m[12]=x; m[13]=y; m[14]=z;
+    return m;
+  }
+  function mat4Scale(x,y,z) {
+    return new Float32Array([ x,0,0,0,  0,y,0,0,  0,0,z,0,  0,0,0,1 ]);
+  }
+  function mat4RotateY(rad) {
+    const c=Math.cos(rad), s=Math.sin(rad);
+    return new Float32Array([ c,0,-s,0,  0,1,0,0,  s,0,c,0,  0,0,0,1 ]);
+  }
+  function mat4RotateX(rad) {
+    const c=Math.cos(rad), s=Math.sin(rad);
+    return new Float32Array([ 1,0,0,0,  0,c,s,0,  0,-s,c,0,  0,0,0,1 ]);
+  }
+  function mat4Perspective(fovy, aspect, near, far) {
+    const f = 1 / Math.tan(fovy/2);
+    const nf = 1 / (near - far);
+    return new Float32Array([
+      f/aspect,0,0,0,
+      0,f,0,0,
+      0,0,(far+near)*nf,-1,
+      0,0,(2*far*near)*nf,0
+    ]);
+  }
+  function v3Normalize(v){
+    const l = Math.hypot(v[0],v[1],v[2]) || 1;
+    return [v[0]/l, v[1]/l, v[2]/l];
+  }
+  function v3Cross(a,b){
+    return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  }
+  function v3Sub(a,b){ return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+  function v3Dot(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+
+  function mat4LookAt(eye, target, up) {
+    const f = v3Normalize(v3Sub(target, eye));
+    const s = v3Normalize(v3Cross(f, up));
+    const u = v3Cross(s, f);
+
+    // Column-major
+    const out = new Float32Array(16);
+    out[0]=s[0]; out[4]=s[1]; out[8] =s[2]; out[12]= -v3Dot(s, eye);
+    out[1]=u[0]; out[5]=u[1]; out[9] =u[2]; out[13]= -v3Dot(u, eye);
+    out[2]=-f[0];out[6]=-f[1];out[10]=-f[2];out[14]=  v3Dot(f, eye);
+    out[3]=0;    out[7]=0;    out[11]=0;    out[15]=1;
+    return out;
+  }
+
+  // Normal matrix for model: inverse-transpose of upper-left 3x3.
+  // Since we only use rotate/scale (no shear), we can do "transpose(inverse(M3))" cheaply.
+  function normalMatrixFromModel(model) {
+    // Extract M3
+    const a00=model[0], a01=model[4], a02=model[8];
+    const a10=model[1], a11=model[5], a12=model[9];
+    const a20=model[2], a21=model[6], a22=model[10];
+
+    const b01 =  a22*a11 - a12*a21;
+    const b11 = -a22*a10 + a12*a20;
+    const b21 =  a21*a10 - a11*a20;
+
+    let det = a00*b01 + a01*b11 + a02*b21;
+    if (Math.abs(det) < 1e-8) det = 1e-8;
+    const invDet = 1.0/det;
+
+    // Inverse(M3)
+    const i00 = b01*invDet;
+    const i01 = (-a22*a01 + a02*a21)*invDet;
+    const i02 = ( a12*a01 - a02*a11)*invDet;
+    const i10 = b11*invDet;
+    const i11 = ( a22*a00 - a02*a20)*invDet;
+    const i12 = (-a12*a00 + a02*a10)*invDet;
+    const i20 = b21*invDet;
+    const i21 = (-a21*a00 + a01*a20)*invDet;
+    const i22 = ( a11*a00 - a01*a10)*invDet;
+
+    // Transpose(inverse)
+    return new Float32Array([
+      i00, i10, i20,
+      i01, i11, i21,
+      i02, i12, i22
+    ]);
+  }
+
+  // ---------- Maze ----------
+  function generateMaze(size) {
+    // size should be odd
+    const maze = Array(size).fill(0).map(() => Array(size).fill(1));
+    const stack = [{x:1, y:1}];
+    maze[1][1]=0;
+
+    while (stack.length) {
+      const cur = stack[stack.length-1];
+      const opts = [];
+      const dirs = [[0,2],[2,0],[0,-2],[-2,0]];
+      for (const [dx,dy] of dirs) {
+        const nx=cur.x+dx, ny=cur.y+dy;
+        if (nx>0 && nx<size-1 && ny>0 && ny<size-1 && maze[ny][nx]===1) {
+          opts.push({nx,ny, mx:cur.x+dx/2, my:cur.y+dy/2});
+        }
+      }
+      if (opts.length) {
+        const pick = opts[(Math.random()*opts.length)|0];
+        maze[pick.ny][pick.nx]=0;
+        maze[pick.my][pick.mx]=0;
+        stack.push({x:pick.nx, y:pick.ny});
+      } else stack.pop();
+    }
+
+    // Ensure exit is open-ish
+    maze[size-2][size-2]=0;
+    return maze;
+  }
+
+  let MAZE_SIZE = 15;
+  let maze = generateMaze(MAZE_SIZE);
+  let ladders = [];
+  let currentLevel = 1;
+  let bossDiamond = null;
+
+  // ---------- Game state ----------
+  const camera = { x: 1.5, y: 0.65, z: 1.5, pitch: 0, yaw: 0 };
+  const keys = Object.create(null);
+  let balloons = [];
+  let cubes = [];
+  let diamonds = [];
+  let bossDiamonds = [];
+  let bossHits = 0;
+  const lasers = [];
+  const particles = [];
+  let resetPromptActive = false;
+  let gameWon = false;
+  let gameOver = false;
+  let lives = 3;
+  let laserAmmo = 3;
+  let sprint = 1.0;
+  let sprintCooldown = 0;
+  let startTime = 0;
+  let elapsedTime = 0;
+  let debugVisible = false;
+  let onWallTop = false;
+
+  // Ladder state machine
+  let ladderState = {
+    mode: "none", // "none" | "mount" | "climb" | "dismount"
+    ladder: null,
+    t: 0,
+    from: null,
+    to: null,
+    targetYaw: 0,
+  };
+
+  function yawToNormal(yaw) {
+    return [Math.sin(yaw), 0, Math.cos(yaw)];
+  }
+
+  function lerp(a,b,t){ return a + (b-a)*t; }
+  function lerpAngle(a,b,t){
+    let d = ((b - a + Math.PI) % (2*Math.PI)) - Math.PI;
+    return a + d * t;
+  }
+
+  // Place items on empty cells, but not too close to start
+  function farEnough(x,z) { return Math.hypot(x-1.5, z-1.5) > 2.5; }
+
+  const balloonsEl = document.getElementById("balloons");
+  const cubesEl = document.getElementById("cubes");
+  const levelEl = document.getElementById("level");
+  const climbHintEl = document.getElementById("climbHint");
+  const resetPromptEl = document.getElementById("resetPrompt");
+  const sprintFillEl = document.getElementById("sprintFill");
+  const laserFillEl = document.getElementById("laserFill");
+  const timerEl = document.getElementById("timer");
+  const leaderboardEl = document.getElementById("leaderboard");
+  const debugEl = document.getElementById("debug");
+  const livesEl = document.getElementById("lives");
+  const gameOverEl = document.getElementById("gameOver");
+  const damageFlashEl = document.getElementById("damageFlash");
+  const dangerVignetteEl = document.getElementById("dangerVignette");
+  debugEl.style.display = "none";
+  
+  function updateCounts() {
+    balloonsEl.textContent = balloons.filter(b=>b.active).length;
+    cubesEl.textContent = cubes.filter(c=>c.active).length;
+    levelEl.textContent = currentLevel;
+    climbHintEl.style.display = currentLevel >= 2 ? "inline" : "none";
+    livesEl.style.display = currentLevel >= 3 ? "block" : "none";
+    if (currentLevel >= 3) livesEl.textContent = "Lives: " + "❤".repeat(lives);
+  }
+  
+  function formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    const tenths = Math.floor((seconds % 1) * 10);
+    return `${mins}:${secs.toString().padStart(2, '0')}.${tenths}`;
+  }
+  
+  function updateLeaderboard() {
+    const times = JSON.parse(localStorage.getItem('mazeTimes') || '[]');
+    let html = '<div style="text-align: center; margin-bottom: 5px;">TOP TIMES</div>';
+    times.slice(0, 5).forEach((time, i) => {
+      html += `<div>${i + 1}. ${formatTime(time)}</div>`;
+    });
+    leaderboardEl.innerHTML = html;
+  }
+  
+  function addTime(time) {
+    const times = JSON.parse(localStorage.getItem('mazeTimes') || '[]');
+    times.push(time);
+    times.sort((a, b) => a - b);
+    localStorage.setItem('mazeTimes', JSON.stringify(times.slice(0, 10)));
+    updateLeaderboard();
+  }
+
+  function initGame(level = 1) {
+    currentLevel = level;
+    MAZE_SIZE = level === 4 ? 31 : 15;
+    maze = generateMaze(MAZE_SIZE);
+    ladders.length = 0;
+    camera.x = 1.5; camera.y = 0.65; camera.z = 1.5; camera.pitch = 0;
+    onWallTop = false;
+    
+    // Find initial yaw that faces open space
+    const angles = [0, Math.PI/2, Math.PI, -Math.PI/2];
+    let bestYaw = 0;
+    let maxDist = 0;
+    for (const yaw of angles) {
+      const dx = Math.sin(yaw);
+      const dz = Math.cos(yaw);
+      const checkX = Math.floor(camera.x + dx);
+      const checkZ = Math.floor(camera.z + dz);
+      if (checkX >= 0 && checkX < MAZE_SIZE && checkZ >= 0 && checkZ < MAZE_SIZE && maze[checkZ][checkX] === 0) {
+        let dist = 1;
+        for (let i = 2; i < 5; i++) {
+          const cx = Math.floor(camera.x + dx * i);
+          const cz = Math.floor(camera.z + dz * i);
+          if (cx >= 0 && cx < MAZE_SIZE && cz >= 0 && cz < MAZE_SIZE && maze[cz][cx] === 0) dist++;
+          else break;
+        }
+        if (dist > maxDist) {
+          maxDist = dist;
+          bestYaw = yaw;
+        }
+      }
+    }
+    camera.yaw = bestYaw;
+    
+    balloons.length = 0;
+    cubes.length = 0;
+    diamonds.length = 0;
+    bossDiamonds = [];
+    bossHits = 0;
+    lasers.length = 0;
+    particles.length = 0;
+    gameWon = false;
+    gameOver = false;
+    lives = 3;
+    laserAmmo = 3;
+    sprint = 1.0;
+    sprintCooldown = 0;
+    startTime = performance.now();
+    elapsedTime = 0;
+    document.getElementById("win").style.display = "none";
+    gameOverEl.style.display = "none";
+    canvas.classList.remove("grayscale");
+    
+    if (currentLevel >= 2 && currentLevel !== 4) {
+      // Place ladders on walls (Level 2+)
+      const FACE_OFFSET = 0.51;
+      for (let z = 1; z < MAZE_SIZE - 1; z++) {
+        for (let x = 1; x < MAZE_SIZE - 1; x++) {
+          if (maze[z][x] !== 1) continue;
+
+          const faces = [];
+          if (maze[z][x - 1] === 0) faces.push({ ox: -FACE_OFFSET, oz: 0, yaw: Math.PI / 2 });
+          if (maze[z][x + 1] === 0) faces.push({ ox:  FACE_OFFSET, oz: 0, yaw: -Math.PI / 2 });
+
+          if (!faces.length) continue;
+          if (!farEnough(x + 0.5, z + 0.5)) continue;
+          if (Math.random() >= 0.08) continue;
+
+          // Check if any adjacent wall already has a ladder
+          const hasAdjacentLadder = ladders.some(l => {
+            const lx = Math.floor(l.x + 0.5);
+            const lz = Math.floor(l.z + 0.5);
+            return Math.abs(lx - x) + Math.abs(lz - z) === 1;
+          });
+          if (hasAdjacentLadder) continue;
+
+          const f = faces[(Math.random() * faces.length) | 0];
+          ladders.push({
+            x: x + 0.5 + f.ox,
+            z: z + 0.5 + f.oz,
+            yaw: f.yaw,
+          });
+        }
+      }
+    }
+    
+    // Place collectibles (ground level)
+    for (let z=0; z<MAZE_SIZE; z++) {
+      for (let x=0; x<MAZE_SIZE; x++) {
+        if (maze[z][x] !== 0) continue;
+        const px = x + 0.5, pz = z + 0.5;
+        if (!farEnough(px,pz)) continue;
+        const r = Math.random();
+        const mult = currentLevel === 4 ? 0.625 : 1.0;
+        const balloonRate = (currentLevel >= 2 ? 0.08 : 0.06) * mult;
+        const cubeRate = (currentLevel >= 2 ? 0.14 : 0.10) * mult;
+        if (r < balloonRate) {
+          const isBlue = currentLevel >= 3 && Math.random() < 0.5;
+          balloons.push({ x:px, y:0.95, z:pz, active:true, phase:Math.random()*6.28, onWall:false, blue:isBlue, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
+        } else if (r < cubeRate) cubes.push({ x:px, y:0.70, z:pz, active:true, rot:Math.random()*6.28, onWall:false });
+      }
+    }
+    
+    if (currentLevel >= 2 && currentLevel !== 4) {
+      // Place collectibles on wall tops (Level 2+)
+      for (let z=0; z<MAZE_SIZE; z++) {
+        for (let x=0; x<MAZE_SIZE; x++) {
+          if (maze[z][x] !== 1) continue;
+          const px = x + 0.5, pz = z + 0.5;
+          if (!farEnough(px,pz)) continue;
+          const r = Math.random();
+          const mult = currentLevel === 4 ? 0.625 : 1.0;
+          if (r < 0.12 * mult) {
+            const isBlue = currentLevel >= 3 && Math.random() < 0.5;
+            balloons.push({ x:px, y:1.95, z:pz, active:true, phase:Math.random()*6.28, onWall:true, blue:isBlue, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
+          } else if (r < 0.20 * mult) cubes.push({ x:px, y:1.70, z:pz, active:true, rot:Math.random()*6.28, onWall:true });
+        }
+      }
+    }
+    
+    if (currentLevel >= 3 && currentLevel !== 4) {
+      // Level 3: Add purple patrol diamonds (ground)
+      for (let z=0; z<MAZE_SIZE; z++) {
+        for (let x=0; x<MAZE_SIZE; x++) {
+          if (maze[z][x] !== 0) continue;
+          const px = x + 0.5, pz = z + 0.5;
+          if (!farEnough(px,pz)) continue;
+          const mult = currentLevel === 4 ? 0.625 : 1.0;
+          if (Math.random() < 0.08 * mult) {
+            diamonds.push({ x:px, y:0.70, z:pz, active:true, angle:Math.random()*6.28, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0, onWall:false });
+          }
+        }
+      }
+      // Level 3: Add purple patrol diamonds (wall tops)
+      for (let z=0; z<MAZE_SIZE; z++) {
+        for (let x=0; x<MAZE_SIZE; x++) {
+          if (maze[z][x] !== 1) continue;
+          const px = x + 0.5, pz = z + 0.5;
+          if (!farEnough(px,pz)) continue;
+          const mult = currentLevel === 4 ? 0.625 : 1.0;
+          if (Math.random() < 0.06 * mult) {
+            diamonds.push({ x:px, y:1.70, z:pz, active:true, angle:Math.random()*6.28, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0, onWall:true });
+          }
+        }
+      }
+      console.log('Spawned', diamonds.length, 'diamonds in level 3');
+    }
+    
+    if (currentLevel === 4) {
+      for (let z=0; z<MAZE_SIZE; z++) {
+        for (let x=0; x<MAZE_SIZE; x++) {
+          if (maze[z][x] !== 0) continue;
+          const px = x + 0.5, pz = z + 0.5;
+          if (!farEnough(px,pz)) continue;
+          if (Math.random() < 0.05) {
+            diamonds.push({ x:px, y:0.70, z:pz, active:true, angle:Math.random()*6.28, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0, onWall:false });
+          }
+        }
+      }
+    }
+    
+    if (currentLevel === 4) {
+      const totalObjects = balloons.length + cubes.length + diamonds.length;
+      const bossCount = Math.max(3, Math.floor(totalObjects / 20));
+      for (let i = 0; i < bossCount; i++) {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const x = Math.floor(Math.random() * (MAZE_SIZE - 2)) + 1;
+          const z = Math.floor(Math.random() * (MAZE_SIZE - 2)) + 1;
+          if (maze[z][x] === 0 && Math.hypot(x + 0.5 - 1.5, z + 0.5 - 1.5) > 5) {
+            bossDiamonds.push({ x: x + 0.5, y: 0.70, z: z + 0.5, active: true, angle: 0, hits: 0, enraged: false });
+            break;
+          }
+        }
+      }
+      console.log('Spawned', bossDiamonds.length, 'boss diamonds');
+    }
+    updateCounts();
+  }
+
+  initGame();
+  updateLeaderboard();
+
+  // ---------- Input ----------
+  let pendingShoot = false;
+  let spacePressed = false;
+
+  document.addEventListener("keydown", e => {
+    if (e.code === "Space") e.preventDefault();
+    
+    if ((gameWon || gameOver) && e.code === "KeyR") {
+      const nextLevel = gameWon ? (currentLevel === 1 ? 2 : currentLevel === 2 ? 3 : currentLevel === 3 ? 4 : 1) : currentLevel;
+      initGame(nextLevel);
+      canvas.requestPointerLock();
+      return;
+    }
+    if (e.code === "Backquote") {
+      debugVisible = !debugVisible;
+      debugEl.style.display = debugVisible ? "block" : "none";
+      return;
+    }
+    if (debugVisible && e.code === "Digit2") {
+      initGame(2);
+      return;
+    }
+    if (debugVisible && e.code === "Digit3") {
+      initGame(3);
+      return;
+    }
+    if (debugVisible && e.code === "Digit4") {
+      initGame(4);
+      return;
+    }
+    if (debugVisible && e.code === "Equal") {
+      lives = Math.min(3, lives + 1);
+      updateCounts();
+      return;
+    }
+    if (resetPromptActive) {
+      if (e.code === "KeyR") {
+        resetPromptActive = false;
+        resetPromptEl.style.display = "none";
+        initGame(currentLevel);
+        canvas.requestPointerLock();
+      }
+      return;
+    }
+    keys[e.code]=true;
+    if (e.code === "Space") spacePressed = true;
+  }, { passive: false });
+  document.addEventListener("keyup", e => {
+    if (resetPromptActive) return;
+    keys[e.code]=false;
+  });
+
+  canvas.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    if (resetPromptActive) {
+      resetPromptActive = false;
+      resetPromptEl.style.display = "none";
+      canvas.requestPointerLock();
+    } else if (document.pointerLockElement === canvas) {
+      shoot();
+    } else {
+      pendingShoot = true;
+      canvas.requestPointerLock();
+    }
+  });
+
+  document.addEventListener("pointerlockchange", () => {
+    if (document.pointerLockElement === canvas) {
+      if (pendingShoot) {
+        pendingShoot = false;
+        shoot();
+      }
+    } else {
+      pendingShoot = false;
+      resetPromptActive = true;
+      resetPromptEl.style.display = "block";
+    }
+  });
+
+  document.addEventListener("mousemove", e => {
+    if (document.pointerLockElement !== canvas) return;
+    camera.yaw -= e.movementX * 0.0022;
+    camera.pitch -= e.movementY * 0.0022;
+    camera.pitch = Math.max(-1.2, Math.min(1.2, camera.pitch));
+  });
+
+  function shoot() {
+    if (laserAmmo < 1) return;
+    laserAmmo = Math.max(0, laserAmmo - 1);
+    laserFillEl.style.width = (laserAmmo / 3 * 100) + "%";
+    
+    const cp = Math.cos(camera.pitch), sp = Math.sin(camera.pitch);
+    const cy = Math.cos(camera.yaw),   sy = Math.sin(camera.yaw);
+    // Forward in our coordinate convention
+    const dir = v3Normalize([sy*cp, sp, cy*cp]);
+    lasers.push({
+      x: camera.x, y: camera.y, z: camera.z,
+      dx: dir[0], dy: dir[1], dz: dir[2],
+      life: 60
+    });
+  }
+
+  // ---------- Shaders (better lighting) ----------
+  const vs = compile(gl.VERTEX_SHADER, `
+    attribute vec3 a_pos;
+    attribute vec3 a_nrm;
+
+    uniform mat4 u_mvp;
+    uniform mat4 u_model;
+    uniform mat3 u_nrmMat;
+
+    varying vec3 v_worldPos;
+    varying vec3 v_worldNrm;
+
+    void main(){
+      vec4 wp = u_model * vec4(a_pos, 1.0);
+      v_worldPos = wp.xyz;
+      v_worldNrm = normalize(u_nrmMat * a_nrm);
+      gl_Position = u_mvp * vec4(a_pos, 1.0);
+    }
+  `);
+
+  const fs = compile(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+
+    varying vec3 v_worldPos;
+    varying vec3 v_worldNrm;
+
+    uniform vec3 u_color;
+    uniform vec3 u_camPos;
+
+    uniform vec3 u_lightDir;
+    uniform vec3 u_lightColor;
+    uniform vec3 u_pointPos;
+    uniform vec3 u_pointColor;
+
+    uniform vec3 u_laserPos[8];
+    uniform int u_laserCount;
+    uniform vec3 u_balloonPos[8];
+    uniform int u_balloonCount;
+    uniform vec3 u_cubePos[8];
+    uniform int u_cubeCount;
+
+    float hash(vec3 p) {
+      return fract(sin(dot(p, vec3(127.1, 311.7, 269.5))) * 43758.5453);
+    }
+
+    void main(){
+      vec3 N = normalize(v_worldNrm);
+      vec3 L = normalize(u_lightDir);
+      vec3 P = v_worldPos;
+
+      float diff = max(dot(N, L), 0.0);
+
+      vec3 V = normalize(u_camPos - P);
+      vec3 H = normalize(L + V);
+      float spec = pow(max(dot(N, H), 0.0), 32.0) * diff;
+
+      // Gradient effect for walls: blend with floor color at bottom
+      vec3 finalColor = u_color;
+      if (P.y < 1.0) {
+        float gradient = smoothstep(0.0, 1.0, P.y);
+        vec3 floorColor = vec3(0.18, 0.20, 0.26);
+        finalColor = mix(floorColor, u_color, gradient);
+      }
+
+      // Cool ambient + warm direct
+      vec3 ambient = vec3(0.10, 0.12, 0.18) * finalColor;
+      vec3 diffuse = diff * finalColor * u_lightColor;
+      vec3 specular = spec * u_lightColor;
+
+      // Player point light (flashlight)
+      vec3 Lp = normalize(u_pointPos - P);
+      float dist = length(u_pointPos - P);
+      float pDiff = max(dot(N, Lp), 0.0);
+      float atten = 1.0 / (1.0 + 0.15*dist + 0.05*dist*dist);
+      vec3 pointLight = pDiff * u_pointColor * atten;
+
+      // Laser glow
+      vec3 laserGlow = vec3(0.0);
+      for (int i = 0; i < 8; i++) {
+        if (i >= u_laserCount) break;
+        vec3 Ll = u_laserPos[i] - P;
+        float ldist = length(Ll);
+        if (ldist < 2.5) {
+          float lDiff = max(dot(N, normalize(Ll)), 0.0) * 0.3 + 0.7;
+          float lAtten = exp(-ldist * 1.2) * (1.0 / (1.0 + ldist * 0.5));
+          laserGlow += lDiff * vec3(0.1, 1.0, 0.35) * lAtten * 0.9;
+        }
+      }
+
+      // Balloon glow (red)
+      vec3 balloonGlow = vec3(0.0);
+      for (int i = 0; i < 8; i++) {
+        if (i >= u_balloonCount) break;
+        vec3 Lb = u_balloonPos[i] - P;
+        float bdist = length(Lb);
+        if (bdist < 2.0) {
+          float bDiff = max(dot(N, normalize(Lb)), 0.0) * 0.25 + 0.75;
+          float bAtten = exp(-bdist * 1.4) * (1.0 / (1.0 + bdist * 0.4));
+          balloonGlow += bDiff * vec3(1.0, 0.2, 0.2) * bAtten * 0.7;
+        }
+      }
+
+      // Cube glow (blue)
+      vec3 cubeGlow = vec3(0.0);
+      for (int i = 0; i < 8; i++) {
+        if (i >= u_cubeCount) break;
+        vec3 Lc = u_cubePos[i] - P;
+        float cdist = length(Lc);
+        if (cdist < 2.0) {
+          float cDiff = max(dot(N, normalize(Lc)), 0.0) * 0.25 + 0.75;
+          float cAtten = exp(-cdist * 1.4) * (1.0 / (1.0 + cdist * 0.4));
+          cubeGlow += cDiff * vec3(0.25, 0.55, 1.0) * cAtten * 0.7;
+        }
+      }
+
+      // Floor bounce (fake GI)
+      float floorBounce = clamp((P.y + 0.5) * 0.6, 0.0, 0.25);
+      vec3 bounce = floorBounce * vec3(0.08, 0.10, 0.14);
+
+      // Normal contrast (fake AO)
+      float edge = pow(abs(dot(N, vec3(0.0,1.0,0.0))), 0.35);
+      float aoFactor = mix(0.7, 1.0, edge);
+
+      vec3 col = (ambient + diffuse + pointLight + laserGlow + balloonGlow + cubeGlow + bounce + 0.35*specular) * aoFactor;
+
+      // Distance fog with galaxy
+      float fogDist = length(u_camPos - P);
+      float fog = smoothstep(8.0, 22.0, fogDist);
+      vec3 viewDir = normalize(P - u_camPos);
+      vec3 skyPos = viewDir * 50.0;
+      float stars = step(0.985, hash(floor(skyPos)));
+      float nebula = hash(floor(skyPos * 0.2)) * 0.08;
+      vec3 fogColor = vec3(0.02, 0.01, 0.05) + vec3(0.05, 0.03, 0.15) * nebula + stars * vec3(1.2, 1.1, 1.4);
+      col = mix(col, fogColor, fog);
+
+      // Contrast boost
+      col = pow(col, vec3(1.0/1.35));
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `);
+
+  const program = link(vs, fs);
+  gl.useProgram(program);
+
+  const locPos   = gl.getAttribLocation(program, "a_pos");
+  const locNrm   = gl.getAttribLocation(program, "a_nrm");
+  const locMVP   = gl.getUniformLocation(program, "u_mvp");
+  const locModel = gl.getUniformLocation(program, "u_model");
+  const locNMat  = gl.getUniformLocation(program, "u_nrmMat");
+  const locColor = gl.getUniformLocation(program, "u_color");
+  const locCam   = gl.getUniformLocation(program, "u_camPos");
+  const locLD    = gl.getUniformLocation(program, "u_lightDir");
+  const locLC    = gl.getUniformLocation(program, "u_lightColor");
+  const locPointPos = gl.getUniformLocation(program, "u_pointPos");
+  const locPointColor = gl.getUniformLocation(program, "u_pointColor");
+  const locLaserPos = gl.getUniformLocation(program, "u_laserPos");
+  const locLaserCount = gl.getUniformLocation(program, "u_laserCount");
+  const locBalloonPos = gl.getUniformLocation(program, "u_balloonPos");
+  const locBalloonCount = gl.getUniformLocation(program, "u_balloonCount");
+  const locCubePos = gl.getUniformLocation(program, "u_cubePos");
+  const locCubeCount = gl.getUniformLocation(program, "u_cubeCount");
+
+  // ---------- Geometry (unit cube) ----------
+  // 36 vertices (12 triangles). Normals are per-face.
+  const cubePos = new Float32Array([
+    // Front
+    -0.5,-0.5, 0.5,  0.5,-0.5, 0.5,  0.5, 0.5, 0.5,
+    -0.5,-0.5, 0.5,  0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
+    // Back
+    -0.5,-0.5,-0.5, -0.5, 0.5,-0.5,  0.5, 0.5,-0.5,
+    -0.5,-0.5,-0.5,  0.5, 0.5,-0.5,  0.5,-0.5,-0.5,
+    // Top
+    -0.5, 0.5,-0.5, -0.5, 0.5, 0.5,  0.5, 0.5, 0.5,
+    -0.5, 0.5,-0.5,  0.5, 0.5, 0.5,  0.5, 0.5,-0.5,
+    // Bottom
+    -0.5,-0.5,-0.5,  0.5,-0.5,-0.5,  0.5,-0.5, 0.5,
+    -0.5,-0.5,-0.5,  0.5,-0.5, 0.5, -0.5,-0.5, 0.5,
+    // Right
+     0.5,-0.5,-0.5,  0.5, 0.5,-0.5,  0.5, 0.5, 0.5,
+     0.5,-0.5,-0.5,  0.5, 0.5, 0.5,  0.5,-0.5, 0.5,
+    // Left
+    -0.5,-0.5,-0.5, -0.5,-0.5, 0.5, -0.5, 0.5, 0.5,
+    -0.5,-0.5,-0.5, -0.5, 0.5, 0.5, -0.5, 0.5,-0.5,
+  ]);
+
+  const cubeNrm = new Float32Array([
+    // Front
+    0,0,1, 0,0,1, 0,0,1,  0,0,1, 0,0,1, 0,0,1,
+    // Back
+    0,0,-1, 0,0,-1, 0,0,-1,  0,0,-1, 0,0,-1, 0,0,-1,
+    // Top
+    0,1,0, 0,1,0, 0,1,0,  0,1,0, 0,1,0, 0,1,0,
+    // Bottom
+    0,-1,0, 0,-1,0, 0,-1,0,  0,-1,0, 0,-1,0, 0,-1,0,
+    // Right
+    1,0,0, 1,0,0, 1,0,0,  1,0,0, 1,0,0, 1,0,0,
+    // Left
+    -1,0,0, -1,0,0, -1,0,0,  -1,0,0, -1,0,0, -1,0,0,
+  ]);
+
+  // Icosphere for balloons (smooth sphere)
+  function makeIcosphere() {
+    const t = (1 + Math.sqrt(5)) / 2;
+    const verts = [
+      [-1,t,0],[1,t,0],[-1,-t,0],[1,-t,0],[0,-1,t],[0,1,t],[0,-1,-t],[0,1,-t],
+      [t,0,-1],[t,0,1],[-t,0,-1],[-t,0,1]
+    ];
+    const faces = [
+      [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],
+      [10,7,6],[7,1,8],[3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],
+      [6,2,10],[8,6,7],[9,8,1]
+    ];
+    
+    const pos = [], nrm = [];
+    faces.forEach(f => {
+      f.forEach(i => {
+        const v = verts[i];
+        const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+        const n = [v[0]/len, v[1]/len, v[2]/len];
+        pos.push(n[0]*0.5, n[1]*0.5, n[2]*0.5);
+        nrm.push(n[0], n[1], n[2]);
+      });
+    });
+    return {pos: new Float32Array(pos), nrm: new Float32Array(nrm), count: pos.length/3};
+  }
+  
+  // Diamond (octahedron) for enemies
+  function makeDiamond() {
+    const verts = [[0,1,0],[1,0,0],[0,0,1],[-1,0,0],[0,0,-1],[0,-1,0]];
+    const faces = [
+      [0,2,1],[0,1,4],[0,4,3],[0,3,2],
+      [5,1,2],[5,4,1],[5,3,4],[5,2,3]
+    ];
+    const pos = [], nrm = [];
+    faces.forEach(f => {
+      const v0=verts[f[0]], v1=verts[f[1]], v2=verts[f[2]];
+      const e1=[v1[0]-v0[0],v1[1]-v0[1],v1[2]-v0[2]];
+      const e2=[v2[0]-v0[0],v2[1]-v0[1],v2[2]-v0[2]];
+      const n=[e1[1]*e2[2]-e1[2]*e2[1],e1[2]*e2[0]-e1[0]*e2[2],e1[0]*e2[1]-e1[1]*e2[0]];
+      const len=Math.sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2])||1;
+      n[0]/=len;n[1]/=len;n[2]/=len;
+      f.forEach(i=>{
+        pos.push(verts[i][0]*0.5,verts[i][1]*0.5,verts[i][2]*0.5);
+        nrm.push(n[0],n[1],n[2]);
+      });
+    });
+    return {pos: new Float32Array(pos), nrm: new Float32Array(nrm), count: pos.length/3};
+  }
+  
+  const sphere = makeIcosphere();
+  const diamond = makeDiamond();
+
+  const bufPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufPos);
+  gl.bufferData(gl.ARRAY_BUFFER, cubePos, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(locPos);
+  gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+
+  const bufNrm = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm);
+  gl.bufferData(gl.ARRAY_BUFFER, cubeNrm, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(locNrm);
+  gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+  
+  // Sphere buffers
+  const bufSpherePos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufSpherePos);
+  gl.bufferData(gl.ARRAY_BUFFER, sphere.pos, gl.STATIC_DRAW);
+  
+  const bufSphereNrm = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufSphereNrm);
+  gl.bufferData(gl.ARRAY_BUFFER, sphere.nrm, gl.STATIC_DRAW);
+  
+  // Diamond buffers
+  const bufDiamondPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufDiamondPos);
+  gl.bufferData(gl.ARRAY_BUFFER, diamond.pos, gl.STATIC_DRAW);
+  
+  const bufDiamondNrm = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufDiamondNrm);
+  gl.bufferData(gl.ARRAY_BUFFER, diamond.nrm, gl.STATIC_DRAW);
+  
+  console.log('Diamond geometry:', diamond.count, 'triangles');
+
+  // ---------- Galaxy background shader ----------
+  const skyVs = compile(gl.VERTEX_SHADER, `
+    attribute vec2 a_pos;
+    varying vec2 v_uv;
+    void main(){
+      v_uv = a_pos * 0.5 + 0.5;
+      gl_Position = vec4(a_pos, 1.0, 1.0);
+    }
+  `);
+
+  const skyFs = compile(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    varying vec2 v_uv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    void main(){
+      vec2 uv = v_uv * 400.0;
+      float stars = step(0.997, hash(floor(uv)));
+      float nebula = hash(floor(uv * 0.025)) * 0.12;
+      
+      // Dusk gradient: dark blue at top to black at bottom
+      float gradient = smoothstep(0.0, 1.0, 1.0 - v_uv.y);
+      vec3 duskTop = vec3(0.05, 0.08, 0.15);
+      vec3 duskBottom = vec3(0.01, 0.01, 0.02);
+      vec3 base = mix(duskBottom, duskTop, gradient);
+      
+      vec3 col = base + vec3(0.04, 0.02, 0.10) * nebula + stars * vec3(0.9, 0.9, 1.0);
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `);
+
+  const skyProg = link(skyVs, skyFs);
+  const skyLocPos = gl.getAttribLocation(skyProg, "a_pos");
+  const skyQuad = new Float32Array([-1,-1, 1,-1, 1,1, -1,-1, 1,1, -1,1]);
+  const skyBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, skyQuad, gl.STATIC_DRAW);
+
+  // ---------- Render state ----------
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+
+  function collidesCircleWithWalls(x, z, r) {
+    const minX = Math.floor(x - r) - 1;
+    const maxX = Math.floor(x + r) + 1;
+    const minZ = Math.floor(z - r) - 1;
+    const maxZ = Math.floor(z + r) + 1;
+
+    for (let mz = minZ; mz <= maxZ; mz++) {
+      for (let mx = minX; mx <= maxX; mx++) {
+        if (mx < 0 || mz < 0 || mx >= MAZE_SIZE || mz >= MAZE_SIZE) return true;
+        if (maze[mz][mx] === 0) continue;
+
+        const closestX = Math.max(mx, Math.min(x, mx + 1));
+        const closestZ = Math.max(mz, Math.min(z, mz + 1));
+        const dx = x - closestX;
+        const dz = z - closestZ;
+        if (dx*dx + dz*dz < r*r) return true;
+      }
+    }
+    return false;
+  }
+
+  function updateDebug() {
+    const mx = Math.floor(camera.x), mz = Math.floor(camera.z);
+    let grid = '';
+    for (let z = mz - 2; z <= mz + 2; z++) {
+      for (let x = mx - 2; x <= mx + 2; x++) {
+        if (x === mx && z === mz) grid += 'P';
+        else if (x < 0 || z < 0 || x >= MAZE_SIZE || z >= MAZE_SIZE) grid += '?';
+        else {
+          const hasLadder = currentLevel >= 2 && ladders.some(l => Math.floor(l.x) === x && Math.floor(l.z) === z);
+          if (hasLadder) grid += 'L';
+          else grid += maze[z][x] === 0 ? '.' : '#';
+        }
+      }
+      grid += '\n';
+    }
+    
+    // Ladder debug info
+    const LADDER_RADIUS = 0.65;
+    const nearLadder = currentLevel >= 2 ? ladders.find(l => Math.hypot(camera.x - l.x, camera.z - l.z) < LADDER_RADIUS) : null;
+    let ladderDist = 'N/A';
+    let ladderDir = 'N/A';
+    if (nearLadder) {
+      ladderDist = Math.hypot(camera.x - nearLadder.x, camera.z - nearLadder.z).toFixed(2);
+      // Convert yaw to compass direction
+      const yaw = nearLadder.yaw;
+      if (Math.abs(yaw) < 0.1) ladderDir = 'N';
+      else if (Math.abs(yaw - Math.PI/2) < 0.1) ladderDir = 'E';
+      else if (Math.abs(yaw - Math.PI) < 0.1 || Math.abs(yaw + Math.PI) < 0.1) ladderDir = 'S';
+      else if (Math.abs(yaw + Math.PI/2) < 0.1) ladderDir = 'W';
+      else ladderDir = yaw.toFixed(2);
+    }
+    
+    const canClimbUp = nearLadder && !onWallTop && camera.pitch > 0.80;
+    const canClimbDown = nearLadder && onWallTop && camera.pitch < -0.80;
+    
+    // Player facing direction
+    const playerYaw = camera.yaw;
+    let playerDir = '';
+    if (Math.abs(playerYaw) < 0.4) playerDir = 'N';
+    else if (Math.abs(playerYaw - Math.PI/2) < 0.4) playerDir = 'E';
+    else if (Math.abs(playerYaw - Math.PI) < 0.4 || Math.abs(playerYaw + Math.PI) < 0.4) playerDir = 'S';
+    else if (Math.abs(playerYaw + Math.PI/2) < 0.4) playerDir = 'W';
+    else playerDir = playerYaw.toFixed(2);
+    
+    document.getElementById('debug').textContent = 
+      `Level: ${currentLevel}\n` +
+      `X:${camera.x.toFixed(2)} Y:${camera.z.toFixed(2)} Z:${camera.y.toFixed(2)}\n` +
+      `Facing: ${playerDir} | Pitch: ${camera.pitch.toFixed(2)} | OnWall: ${onWallTop}\n` +
+      `Near Ladder: ${nearLadder ? 'YES' : 'NO'} | Dist: ${ladderDist}\n` +
+      `Ladder Dir: ${ladderDir}\n` +
+      `W Pressed: ${keys['KeyW'] ? 'YES' : 'NO'}\n` +
+      `Can Climb Up: ${canClimbUp ? 'YES' : 'NO'}\n` +
+      `Can Climb Down: ${canClimbDown ? 'YES' : 'NO'}\n` +
+      `Ladders: ${ladders.length}\n` +
+      `Press 2 to jump to Level 2\n\n${grid}`;
+  }
+
+  function spawnConfetti(x, y, z) {
+    const colors = [[1,0.2,0.2], [1,0.8,0.2], [0.2,0.8,1], [1,0.4,0.8], [0.8,1,0.3]];
+    for (let i=0; i<20; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.8 + Math.random() * 1.2;
+      const vx = Math.cos(angle) * speed;
+      const vz = Math.sin(angle) * speed;
+      const vy = 1.5 + Math.random() * 1.5;
+      particles.push({
+        x, y, z,
+        vx, vy, vz,
+        life: 1.5 + Math.random() * 0.5,
+        size: 0.03 + Math.random() * 0.04,
+        color: colors[(Math.random() * colors.length)|0],
+        spin: Math.random() * 10 - 5
+      });
+    }
+  }
+  
+  function spawnLaserBreak(x, y, z) {
+    for (let i=0; i<12; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const elev = (Math.random() - 0.5) * Math.PI * 0.5;
+      const speed = 1.5 + Math.random() * 2.0;
+      const vx = Math.cos(angle) * Math.cos(elev) * speed;
+      const vy = Math.sin(elev) * speed;
+      const vz = Math.sin(angle) * Math.cos(elev) * speed;
+      particles.push({
+        x, y, z,
+        vx, vy, vz,
+        life: 0.4 + Math.random() * 0.3,
+        size: 0.02 + Math.random() * 0.02,
+        color: [0.1, 1.0, 0.35],
+        spin: Math.random() * 15 - 7.5
+      });
+    }
+  }
+  
+  function spawnExplosion(x, y, z) {
+    for (let i=0; i<40; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const elev = (Math.random() - 0.5) * Math.PI;
+      const speed = 2.0 + Math.random() * 3.0;
+      const vx = Math.cos(angle) * Math.cos(elev) * speed;
+      const vy = Math.sin(elev) * speed;
+      const vz = Math.sin(angle) * Math.cos(elev) * speed;
+      particles.push({
+        x, y, z,
+        vx, vy, vz,
+        life: 0.8 + Math.random() * 0.4,
+        size: 0.04 + Math.random() * 0.06,
+        color: [0.8, 0.2, 0.8],
+        spin: Math.random() * 15 - 7.5
+      });
+    }
+  }
+
+  function update(dt, t) {
+    if (gameOver) {
+      // During game over, only update particles with slow motion
+      const slowDt = dt * 0.3;
+      for (let i=particles.length-1; i>=0; i--) {
+        const p = particles[i];
+        p.x += p.vx * slowDt;
+        p.y += p.vy * slowDt;
+        p.z += p.vz * slowDt;
+        p.vy -= 4.0 * slowDt;
+        p.vx *= 0.98;
+        p.vz *= 0.98;
+        p.life -= slowDt;
+        if (p.life <= 0 || p.y < 0.05) particles.splice(i, 1);
+      }
+      return;
+    }
+    if (!gameWon) {
+      elapsedTime = (performance.now() - startTime) / 1000;
+      timerEl.textContent = formatTime(elapsedTime);
+    }
+    
+    const isSprinting = keys["ShiftLeft"] || keys["ShiftRight"];
+    const isMoving = keys["KeyW"] || keys["KeyS"] || keys["KeyA"] || keys["KeyD"];
+    
+    if (isSprinting && isMoving && sprint > 0) {
+      sprint = Math.max(0, sprint - dt * 0.5);
+      sprintCooldown = 0.3;
+    } else {
+      if (sprintCooldown > 0) {
+        sprintCooldown -= dt;
+      } else {
+        sprint = Math.min(1.0, sprint + dt * 0.4);
+      }
+    }
+    sprintFillEl.style.width = (sprint * 100) + "%";
+    laserFillEl.style.width = (laserAmmo / 3 * 100) + "%";
+    
+    // Laser ammo recharge
+    if (laserAmmo < 3) {
+      laserAmmo = Math.min(3, laserAmmo + dt * 0.8);
+      laserFillEl.style.width = (laserAmmo / 3 * 100) + "%";
+    }
+    
+    const canSprint = isSprinting && sprint > 0;
+    const speedMult = canSprint ? 2.0 : 1.0;
+    const moveSpeed = 2.4 * speedMult;
+    const step = moveSpeed * dt;
+
+    const cy = Math.cos(camera.yaw), sy = Math.sin(camera.yaw);
+
+    // forward/right on XZ plane
+    const fwd = [sy, 0, cy];
+    const rgt = [-cy, 0, sy];
+
+    let vx=0, vz=0;
+    if (keys["KeyW"]) { vx += fwd[0]; vz += fwd[2]; }
+    if (keys["KeyS"]) { vx -= fwd[0]; vz -= fwd[2]; }
+    if (keys["KeyA"]) { vx -= rgt[0]; vz -= rgt[2]; }
+    if (keys["KeyD"]) { vx += rgt[0]; vz += rgt[2]; }
+
+    const len = Math.hypot(vx,vz);
+    if (len > 0) { vx/=len; vz/=len; }
+
+    const radius = 0.18;
+    const nx = camera.x + vx*step;
+    const nz = camera.z + vz*step;
+
+    // --- Ladder interaction (Level 2+) ---
+    const LADDER_RADIUS = 0.65;
+    const nearLadder = (currentLevel >= 2)
+      ? ladders.find(l => Math.hypot(camera.x - l.x, camera.z - l.z) < LADDER_RADIUS)
+      : null;
+
+    const wantMount = nearLadder && !onWallTop && (keys["KeyW"] && camera.pitch > 0.8);
+    const wantDismountDown = nearLadder && onWallTop && (keys["KeyS"] && camera.pitch < -0.8);
+
+    if (ladderState.mode === "none") {
+      if (wantMount) {
+        ladderState.mode = "mount";
+        ladderState.ladder = nearLadder;
+        ladderState.t = 0;
+
+        const n = yawToNormal(nearLadder.yaw);
+        const standoff = 0.28;
+        const targetX = nearLadder.x - n[0] * standoff;
+        const targetZ = nearLadder.z - n[2] * standoff;
+
+        ladderState.from = { x: camera.x, y: camera.y, z: camera.z, yaw: camera.yaw };
+        ladderState.to   = { x: targetX,  y: camera.y, z: targetZ,  yaw: nearLadder.yaw };
+        ladderState.targetYaw = nearLadder.yaw;
+      } else if (wantDismountDown) {
+        ladderState.mode = "mount";
+        ladderState.ladder = nearLadder;
+        ladderState.t = 0;
+
+        const n = yawToNormal(nearLadder.yaw);
+        const standoff = 0.28;
+        const targetX = nearLadder.x - n[0] * standoff;
+        const targetZ = nearLadder.z - n[2] * standoff;
+
+        ladderState.from = { x: camera.x, y: camera.y, z: camera.z, yaw: camera.yaw };
+        ladderState.to   = { x: targetX,  y: camera.y, z: targetZ,  yaw: nearLadder.yaw };
+        ladderState.targetYaw = nearLadder.yaw;
+      }
+    }
+
+    const onLadder = ladderState.mode !== "none";
+
+    // Smooth mount/dismount transitions
+    if (ladderState.mode === "mount") {
+      ladderState.t = Math.min(1, ladderState.t + dt * 7.5);
+      const s = ladderState.t;
+      camera.x = lerp(ladderState.from.x, ladderState.to.x, s);
+      camera.z = lerp(ladderState.from.z, ladderState.to.z, s);
+      camera.yaw = lerpAngle(ladderState.from.yaw, ladderState.targetYaw, s);
+
+      if (ladderState.t >= 1) {
+        ladderState.mode = "climb";
+      }
+    }
+
+    // Actual climbing
+    if (ladderState.mode === "climb") {
+      const l = ladderState.ladder;
+      const n = yawToNormal(l.yaw);
+
+      // Keep x/z locked to ladder plane every frame (prevents drift -> wall clipping)
+      const standoff = 0.28;
+      camera.x = l.x - n[0] * standoff;
+      camera.z = l.z - n[2] * standoff;
+
+      // Soft-lock yaw to face ladder
+      camera.yaw = lerpAngle(camera.yaw, l.yaw, Math.min(1, dt * 10));
+
+      const climbSpeed = 1.7;
+      const up = keys["KeyW"] ? 1 : 0;
+      const down = keys["KeyS"] ? 1 : 0;
+      const v = (up - down) * climbSpeed;
+
+      camera.y += v * dt;
+
+      const bottomY = 0.65;
+      const topY = 1.65;
+
+      if (camera.y >= topY) {
+        camera.y = topY;
+        onWallTop = true;
+
+        // Dismount onto the wall cell behind the ladder (inside the wall top), then offset outward
+        const wallX = Math.floor(l.x);
+        const wallZ = Math.floor(l.z);
+
+        // Put player at wall-top cell center
+        const centerX = wallX + 0.5;
+        const centerZ = wallZ + 0.5;
+
+        // Offset outward from ladder face so you don't end up embedded
+        const out = 0.62;
+        ladderState.mode = "dismount";
+        ladderState.t = 0;
+        ladderState.from = { x: camera.x, y: camera.y, z: camera.z, yaw: camera.yaw };
+        ladderState.to = {
+          x: centerX + n[0] * out,
+          y: topY,
+          z: centerZ + n[2] * out,
+          yaw: l.yaw,
+        };
+        ladderState.targetYaw = l.yaw;
+      } else if (camera.y <= bottomY) {
+        camera.y = bottomY;
+        onWallTop = false;
+
+        // Dismount onto nearest ground cell center "in front" of ladder
+        const gx = Math.floor(l.x - n[0] * 0.8);
+        const gz = Math.floor(l.z - n[2] * 0.8);
+        const centerX = gx + 0.5;
+        const centerZ = gz + 0.5;
+
+        const out = 0.62;
+        ladderState.mode = "dismount";
+        ladderState.t = 0;
+        ladderState.from = { x: camera.x, y: camera.y, z: camera.z, yaw: camera.yaw };
+        ladderState.to = {
+          x: centerX,
+          y: bottomY,
+          z: centerZ,
+          yaw: l.yaw,
+        };
+        ladderState.targetYaw = l.yaw;
+      }
+    }
+
+    if (ladderState.mode === "dismount") {
+      ladderState.t = Math.min(1, ladderState.t + dt * 7.5);
+      const s = ladderState.t;
+      camera.x = lerp(ladderState.from.x, ladderState.to.x, s);
+      camera.z = lerp(ladderState.from.z, ladderState.to.z, s);
+      camera.yaw = lerpAngle(ladderState.from.yaw, ladderState.targetYaw, s);
+
+      if (ladderState.t >= 1) {
+        ladderState.mode = "none";
+        ladderState.ladder = null;
+      }
+    }
+
+    spacePressed = false;
+
+    if (onLadder) {
+      // Skip normal movement while on ladder
+    } else if (onWallTop && currentLevel >= 2) {
+      // On wall top - can walk on walls, fall off edges
+      const mx = Math.floor(camera.x), mz = Math.floor(camera.z);
+      const isOnWall = mx >= 0 && mz >= 0 && mx < MAZE_SIZE && mz < MAZE_SIZE && maze[mz][mx] === 1;
+      
+      if (!isOnWall) {
+        // Falling off wall
+        camera.y = 0.65;
+        onWallTop = false;
+      } else {
+        // Move on wall top
+        const nmx = Math.floor(nx), nmz = Math.floor(nz);
+        const canMoveX = nmx >= 0 && nmx < MAZE_SIZE && Math.floor(camera.z) >= 0 && Math.floor(camera.z) < MAZE_SIZE && maze[Math.floor(camera.z)][nmx] === 1;
+        const canMoveZ = nmz >= 0 && nmz < MAZE_SIZE && Math.floor(camera.x) >= 0 && Math.floor(camera.x) < MAZE_SIZE && maze[nmz][Math.floor(camera.x)] === 1;
+        
+        if (canMoveX) camera.x = nx;
+        if (canMoveZ) camera.z = nz;
+      }
+    } else {
+      // Ground level movement with substep collision
+      let remaining = step;
+      const maxStep = 0.08;
+
+      while (remaining > 0) {
+        const s = Math.min(remaining, maxStep);
+        const subNx = camera.x + vx * s;
+        const subNz = camera.z + vz * s;
+
+        if (!collidesCircleWithWalls(subNx, camera.z, radius)) camera.x = subNx;
+        if (!collidesCircleWithWalls(camera.x, subNz, radius)) camera.z = subNz;
+
+        remaining -= s;
+      }
+    }
+
+    // update collectibles
+    for (const c of cubes) {
+      if (!c.active) continue;
+      c.rot += dt * 2.2;
+      const baseY = c.onWall ? 1.70 : 0.70;
+      const vertDist = Math.abs(camera.y - baseY);
+      if (Math.hypot(camera.x - c.x, camera.z - c.z) < 0.45 && vertDist < 0.5) {
+        c.active = false;
+        updateCounts();
+      }
+    }
+
+    // balloons bob and float
+    for (const b of balloons) {
+      if (!b.active) continue;
+      const baseY = b.onWall ? 1.95 : 0.95;
+      b.y = baseY + Math.sin(t*2.2 + b.phase)*0.06;
+      if (b.blue) {
+        b.moveTimer -= dt;
+        if (b.moveTimer <= 0) {
+          // Pick new random target within 2 spaces
+          const attempts = 20;
+          for (let i = 0; i < attempts; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 0.5 + Math.random() * 1.5;
+            const tx = b.baseX + Math.cos(angle) * dist;
+            const tz = b.baseZ + Math.sin(angle) * dist;
+            const mx = Math.floor(tx), mz = Math.floor(tz);
+            if (mx >= 0 && mz >= 0 && mx < MAZE_SIZE && mz < MAZE_SIZE && 
+                maze[mz][mx] === (b.onWall ? 1 : 0) && 
+                Math.hypot(tx - b.baseX, tz - b.baseZ) <= 2.0) {
+              b.targetX = tx;
+              b.targetZ = tz;
+              b.moveTimer = 1.0 + Math.random() * 1.5;
+              break;
+            }
+          }
+        }
+        // Move toward target with erratic speed and wall collision
+        const speed = 0.8 + Math.sin(t * 5.0 + b.phase) * 0.4;
+        const dx = b.targetX - b.x;
+        const dz = b.targetZ - b.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > 0.05) {
+          const moveSpeed = speed * dt;
+          const nx = b.x + (dx / dist) * moveSpeed;
+          const nz = b.z + (dz / dist) * moveSpeed;
+          // Check wall collision based on whether on wall or ground
+          if (b.onWall) {
+            const mx = Math.floor(nx), mz = Math.floor(b.z);
+            if (mx >= 0 && mx < MAZE_SIZE && mz >= 0 && mz < MAZE_SIZE && maze[mz][mx] === 1) b.x = nx;
+            const mx2 = Math.floor(b.x), mz2 = Math.floor(nz);
+            if (mx2 >= 0 && mx2 < MAZE_SIZE && mz2 >= 0 && mz2 < MAZE_SIZE && maze[mz2][mx2] === 1) b.z = nz;
+          } else {
+            if (!collidesCircleWithWalls(nx, b.z, 0.15)) b.x = nx;
+            if (!collidesCircleWithWalls(b.x, nz, 0.15)) b.z = nz;
+          }
+        }
+      }
+    }
+    
+    // diamonds patrol
+    if (currentLevel >= 3) {
+      for (const d of diamonds) {
+        if (!d.active) continue;
+        d.angle += dt * 3.0;
+        d.moveTimer -= dt;
+        if (d.moveTimer <= 0) {
+          // Pick new patrol target within 5 spaces
+          const attempts = 30;
+          for (let i = 0; i < attempts; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 1.0 + Math.random() * 4.0;
+            const tx = d.baseX + Math.cos(angle) * dist;
+            const tz = d.baseZ + Math.sin(angle) * dist;
+            const mx = Math.floor(tx), mz = Math.floor(tz);
+            if (mx >= 0 && mz >= 0 && mx < MAZE_SIZE && mz < MAZE_SIZE && 
+                maze[mz][mx] === (d.onWall ? 1 : 0) && 
+                Math.hypot(tx - d.baseX, tz - d.baseZ) <= 5.0) {
+              d.targetX = tx;
+              d.targetZ = tz;
+              d.moveTimer = 2.0 + Math.random() * 2.0;
+              break;
+            }
+          }
+        }
+        // Move toward target with wall collision
+        const dx = d.targetX - d.x;
+        const dz = d.targetZ - d.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > 0.05) {
+          const speed = 1.2 * dt;
+          const nx = d.x + (dx / dist) * speed;
+          const nz = d.z + (dz / dist) * speed;
+          // Check wall collision based on whether on wall or ground
+          if (d.onWall) {
+            const mx = Math.floor(nx), mz = Math.floor(d.z);
+            if (mx >= 0 && mx < MAZE_SIZE && mz >= 0 && mz < MAZE_SIZE && maze[mz][mx] === 1) d.x = nx;
+            const mx2 = Math.floor(d.x), mz2 = Math.floor(nz);
+            if (mx2 >= 0 && mx2 < MAZE_SIZE && mz2 >= 0 && mz2 < MAZE_SIZE && maze[mz2][mx2] === 1) d.z = nz;
+          } else {
+            if (!collidesCircleWithWalls(nx, d.z, 0.15)) d.x = nx;
+            if (!collidesCircleWithWalls(d.x, nz, 0.15)) d.z = nz;
+          }
+        }
+        
+        // Check collision with player
+        const playerDist = Math.hypot(camera.x - d.x, camera.z - d.z);
+        const vertDist = Math.abs(camera.y - d.y);
+        if (playerDist < 0.35 && vertDist < 0.5) {
+          d.active = false;
+          spawnExplosion(d.x, d.y, d.z);
+          lives--;
+          updateCounts();
+          // Damage flash
+          damageFlashEl.classList.add('active');
+          setTimeout(() => damageFlashEl.classList.remove('active'), 200);
+          if (lives <= 0) {
+            gameOver = true;
+            canvas.classList.add("grayscale");
+            setTimeout(() => { gameOverEl.style.display = "block"; }, 2000);
+          }
+        }
+      }
+    }
+    
+    // boss diamonds heat-seeking
+    if (currentLevel === 4) {
+      let closestBossDist = Infinity;
+      for (const boss of bossDiamonds) {
+        if (!boss.active) continue;
+        boss.angle += dt * 4.0;
+        const distToPlayer = Math.hypot(camera.x - boss.x, camera.z - boss.z);
+        closestBossDist = Math.min(closestBossDist, distToPlayer);
+        if (distToPlayer <= 10.0) {
+          const dx = camera.x - boss.x;
+          const dz = camera.z - boss.z;
+          const dist = Math.hypot(dx, dz);
+          if (dist > 0.05) {
+            const speed = (boss.enraged ? 2.5 : 0.8) * dt;
+            const nx = boss.x + (dx / dist) * speed;
+            const nz = boss.z + (dz / dist) * speed;
+            if (!collidesCircleWithWalls(nx, boss.z, 0.2)) boss.x = nx;
+            if (!collidesCircleWithWalls(boss.x, nz, 0.2)) boss.z = nz;
+          }
+        }
+        
+        const playerDist = Math.hypot(camera.x - boss.x, camera.z - boss.z);
+        const vertDist = Math.abs(camera.y - boss.y);
+        if (playerDist < 0.45 && vertDist < 0.5) {
+          boss.active = false;
+          spawnExplosion(boss.x, boss.y, boss.z);
+          lives--;
+          updateCounts();
+          damageFlashEl.classList.add('active');
+          setTimeout(() => damageFlashEl.classList.remove('active'), 200);
+          if (lives <= 0) {
+            gameOver = true;
+            canvas.classList.add("grayscale");
+            setTimeout(() => { gameOverEl.style.display = "block"; }, 2000);
+          }
+        }
+      }
+      
+      if (closestBossDist <= 10.0) {
+        const intensity = 1 - (closestBossDist / 10.0);
+        const pulse = Math.sin(t * 3) * 0.3 + 0.7;
+        dangerVignetteEl.style.opacity = intensity * pulse * 0.6;
+      } else {
+        dangerVignetteEl.style.opacity = 0;
+      }
+    }
+
+    // lasers
+    for (let i=lasers.length-1; i>=0; i--) {
+      const l = lasers[i];
+      l.x += l.dx * dt * 10.0;
+      l.y += l.dy * dt * 10.0;
+      l.z += l.dz * dt * 10.0;
+      l.life -= dt;
+
+      // hit balloons
+      for (const b of balloons) {
+        if (!b.active) continue;
+        if (Math.hypot(l.x-b.x, l.y-b.y, l.z-b.z) < 0.18) {
+          b.active = false;
+          l.life = 0;
+          spawnConfetti(b.x, b.y, b.z);
+          updateCounts();
+          break;
+        }
+      }
+      
+      // hit diamonds (indestructible)
+      if (currentLevel >= 3) {
+        for (const d of diamonds) {
+          if (!d.active) continue;
+          if (Math.hypot(l.x-d.x, l.y-d.y, l.z-d.z) < 0.3) {
+            spawnLaserBreak(l.x, l.y, l.z);
+            l.life = 0;
+            break;
+          }
+        }
+      }
+      
+      // hit boss diamond
+      if (currentLevel === 4) {
+        for (const boss of bossDiamonds) {
+          if (!boss.active) continue;
+          if (Math.hypot(l.x-boss.x, l.y-boss.y, l.z-boss.z) < 0.5) {
+            boss.hits++;
+            boss.enraged = true;
+            spawnLaserBreak(l.x, l.y, l.z);
+            l.life = 0;
+            if (boss.hits >= 9) {
+              boss.active = false;
+              spawnExplosion(boss.x, boss.y, boss.z);
+            }
+            break;
+          }
+        }
+      }
+
+      // die on wall (but not if laser is above wall height)
+      const mx = Math.floor(l.x), mz = Math.floor(l.z);
+      if (mx<0||mz<0||mx>=MAZE_SIZE||mz>=MAZE_SIZE || (maze[mz][mx]===1 && l.y < 1.3)) {
+        spawnLaserBreak(l.x, l.y, l.z);
+        l.life = 0;
+      }
+      
+      // die on ground
+      if (l.y < 0.05) {
+        spawnLaserBreak(l.x, l.y, l.z);
+        l.life = 0;
+      }
+
+      if (l.life <= 0) lasers.splice(i,1);
+    }
+
+    // Update particles
+    for (let i=particles.length-1; i>=0; i--) {
+      const p = particles[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      p.vy -= 4.0 * dt; // gravity
+      p.vx *= 0.98; // air resistance
+      p.vz *= 0.98;
+      p.life -= dt;
+      if (p.life <= 0 || p.y < 0.05) particles.splice(i, 1);
+    }
+
+    if (balloons.every(b=>!b.active) && cubes.every(c=>!c.active)) {
+      if (!gameWon) {
+        gameWon = true;
+        addTime(elapsedTime);
+        if (currentLevel === 1) {
+          document.getElementById("win").innerHTML = 'LEVEL 1 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Press R for Level 2</span>';
+        } else if (currentLevel === 2) {
+          document.getElementById("win").innerHTML = 'LEVEL 2 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Press R for Level 3</span>';
+        } else if (currentLevel === 3) {
+          document.getElementById("win").innerHTML = 'LEVEL 3 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Press R for Level 4</span>';
+        } else {
+          document.getElementById("win").innerHTML = 'YOU WIN!<br><span style="font-size: 20px; color: #aaa;">Press R to reset</span>';
+        }
+        document.getElementById("win").style.display = "block";
+      }
+    }
+  }
+
+  function drawModel(proj, view, model, color, useSphere = false, useDiamond = false) {
+    const mvp = mat4Mul(proj, mat4Mul(view, model));
+    gl.uniformMatrix4fv(locMVP, false, mvp);
+    gl.uniformMatrix4fv(locModel, false, model);
+    gl.uniformMatrix3fv(locNMat, false, normalMatrixFromModel(model));
+    gl.uniform3f(locColor, color[0], color[1], color[2]);
+    
+    if (useSphere) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufSpherePos);
+      gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufSphereNrm);
+      gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, sphere.count);
+      
+      // Restore cube buffers
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufPos);
+      gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm);
+      gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+    } else if (useDiamond) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufDiamondPos);
+      gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufDiamondNrm);
+      gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, diamond.count);
+      
+      // Restore cube buffers
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufPos);
+      gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm);
+      gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+    } else {
+      gl.drawArrays(gl.TRIANGLES, 0, 36);
+    }
+  }
+
+  // ---------- Main loop ----------
+  let last = performance.now();
+  function frame(now) {
+    resize();
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    const t = now / 1000;
+    update(dt, t);
+    if (debugVisible) updateDebug();
+
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // Draw galaxy background
+    gl.disable(gl.DEPTH_TEST);
+    gl.useProgram(skyProg);
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
+    gl.enableVertexAttribArray(skyLocPos);
+    gl.vertexAttribPointer(skyLocPos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.enable(gl.DEPTH_TEST);
+    
+    // Switch back to main program
+    gl.useProgram(program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufPos);
+    gl.enableVertexAttribArray(locPos);
+    gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm);
+    gl.enableVertexAttribArray(locNrm);
+    gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+
+    const aspect = canvas.width / canvas.height;
+    const proj = mat4Perspective(Math.PI/3.1, aspect, 0.05, 120);
+
+    const cp=Math.cos(camera.pitch), sp=Math.sin(camera.pitch);
+    const cy=Math.cos(camera.yaw),   sy=Math.sin(camera.yaw);
+    const forward = [sy*cp, sp, cy*cp];
+    const eye = [camera.x, camera.y, camera.z];
+    const target = [camera.x + forward[0], camera.y + forward[1], camera.z + forward[2]];
+    const view = mat4LookAt(eye, target, [0,1,0]);
+
+    // lights
+    gl.uniform3f(locCam, eye[0], eye[1], eye[2]);
+    gl.uniform3f(locLD, 0.55, 1.0, 0.35);
+    gl.uniform3f(locLC, 1.0, 0.95, 0.85);
+    gl.uniform3f(locPointPos, camera.x, camera.y, camera.z);
+    gl.uniform3f(locPointColor, 1.0, 0.95, 0.85);
+
+    // laser positions for glow
+    const laserPositions = new Float32Array(24);
+    const laserCount = Math.min(lasers.length, 8);
+    for (let i = 0; i < laserCount; i++) {
+      laserPositions[i*3] = lasers[i].x;
+      laserPositions[i*3+1] = lasers[i].y;
+      laserPositions[i*3+2] = lasers[i].z;
+    }
+    gl.uniform3fv(locLaserPos, laserPositions);
+    gl.uniform1i(locLaserCount, laserCount);
+
+    // balloon positions for glow
+    const balloonPositions = new Float32Array(24);
+    const activeBalloons = balloons.filter(b => b.active);
+    const balloonCount = Math.min(activeBalloons.length, 8);
+    for (let i = 0; i < balloonCount; i++) {
+      balloonPositions[i*3] = activeBalloons[i].x;
+      balloonPositions[i*3+1] = activeBalloons[i].y;
+      balloonPositions[i*3+2] = activeBalloons[i].z;
+    }
+    gl.uniform3fv(locBalloonPos, balloonPositions);
+    gl.uniform1i(locBalloonCount, balloonCount);
+
+    // cube positions for glow
+    const cubePositions = new Float32Array(24);
+    const activeCubes = cubes.filter(c => c.active);
+    const cubeCount = Math.min(activeCubes.length, 8);
+    for (let i = 0; i < cubeCount; i++) {
+      cubePositions[i*3] = activeCubes[i].x;
+      cubePositions[i*3+1] = activeCubes[i].y;
+      cubePositions[i*3+2] = activeCubes[i].z;
+    }
+    gl.uniform3fv(locCubePos, cubePositions);
+    gl.uniform1i(locCubeCount, cubeCount);
+
+    // floor (thin)
+    // (draw as scaled cube per cell, cheap and looks OK)
+    for (let z=0; z<MAZE_SIZE; z++){
+      for (let x=0; x<MAZE_SIZE; x++){
+        if (maze[z][x] !== 0) continue;
+        const model = mat4Mul(mat4Translate(x+0.5, 0.02, z+0.5), mat4Scale(1.0, 0.04, 1.0));
+        drawModel(proj, view, model, [0.18, 0.20, 0.26]);
+      }
+    }
+
+    // walls (taller for better maze vibe)
+    const wallColors = [
+      [0.50, 0.55, 0.62],
+      [0.40, 0.48, 0.56],
+      [0.52, 0.42, 0.58],
+      [0.55, 0.55, 0.55]
+    ];
+    const wallColor = wallColors[Math.min(currentLevel - 1, 3)];
+    
+    for (let z=0; z<MAZE_SIZE; z++){
+      for (let x=0; x<MAZE_SIZE; x++){
+        if (maze[z][x] !== 1) continue;
+        const model = mat4Mul(mat4Translate(x+0.5, 0.65, z+0.5), mat4Scale(1.0, 1.3, 1.0));
+        drawModel(proj, view, model, wallColor);
+      }
+    }
+
+    // balloons (smooth spheres, bobbing)
+    for (const b of balloons) {
+      if (!b.active) continue;
+      const spin = mat4RotateY(t*1.1*(gameOver ? 0.3 : 1));
+      const model = mat4Mul(mat4Translate(b.x, b.y, b.z), mat4Mul(spin, mat4Scale(0.28, 0.34, 0.28)));
+      const color = b.blue ? [0.2, 0.5, 1.0] : [1.0, 0.20, 0.20];
+      drawModel(proj, view, model, color, true);
+    }
+    
+    // diamonds (Level 3+)
+    if (currentLevel >= 3) {
+      for (const d of diamonds) {
+        if (!d.active) continue;
+        const model = mat4Mul(
+          mat4Translate(d.x, d.y, d.z),
+          mat4Mul(mat4RotateY(d.angle*(gameOver ? 0.3 : 1)), mat4Scale(0.3, 0.3, 0.3))
+        );
+        drawModel(proj, view, model, [0.7, 0.2, 0.8], false, true);
+      }
+    }
+    
+    // boss diamonds (Level 4)
+    if (currentLevel === 4) {
+      for (const boss of bossDiamonds) {
+        if (!boss.active) continue;
+        
+        const model = mat4Mul(
+          mat4Translate(boss.x, boss.y, boss.z),
+          mat4Mul(mat4RotateY(boss.angle*(gameOver ? 0.3 : 1)), mat4Scale(0.8, 0.8, 0.8))
+        );
+        const hitRatio = boss.hits / 9;
+        const color = [0.5 + hitRatio * 0.5, 0.5 - hitRatio * 0.3, 0.5 - hitRatio * 0.3];
+        drawModel(proj, view, model, color, false, true);
+      }
+    }
+
+    // floating cubes (small!)
+    for (const c of cubes) {
+      if (!c.active) continue;
+      const baseY = c.onWall ? 1.70 : 0.70;
+      const bob = baseY + Math.sin(t*3.0*(gameOver ? 0.3 : 1) + c.rot)*0.05;
+      const model = mat4Mul(
+        mat4Translate(c.x, bob, c.z),
+        mat4Mul(mat4RotateY(c.rot*(gameOver ? 0.3 : 1)), mat4Mul(mat4RotateX(-0.35), mat4Scale(0.18, 0.18, 0.18)))
+      );
+      drawModel(proj, view, model, [0.25, 0.55, 1.00]);
+    }
+
+    // ladders (Level 2-3)
+    if (currentLevel >= 2 && currentLevel !== 4) {
+      for (const l of ladders) {
+        const base = mat4Mul(mat4Translate(l.x, 0.65, l.z), mat4RotateY(l.yaw));
+        // Left rail (extended)
+        drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(-0.15, 0.1, 0), mat4Scale(0.04, 1.45, 0.04))), [0.95, 0.70, 0.25]);
+        // Right rail (extended)
+        drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(0.15, 0.1, 0), mat4Scale(0.04, 1.45, 0.04))), [0.95, 0.70, 0.25]);
+        // Rungs
+        for (let i = 0; i < 5; i++) {
+          const rungY = -0.5 + i * 0.25;
+          drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(0, rungY, 0), mat4Scale(0.3, 0.03, 0.03))), [0.95, 0.70, 0.25]);
+        }
+      }
+    }
+
+    // lasers (oriented along travel direction)
+    for (const l of lasers) {
+      // Create rotation matrix to align laser with its direction
+      const len = Math.sqrt(l.dx*l.dx + l.dy*l.dy + l.dz*l.dz);
+      const dx = l.dx/len, dy = l.dy/len, dz = l.dz/len;
+      
+      // Build basis: forward = laser direction, up = world up, right = cross
+      const up = [0, 1, 0];
+      const right = [
+        up[1]*dz - up[2]*dy,
+        up[2]*dx - up[0]*dz,
+        up[0]*dy - up[1]*dx
+      ];
+      const rlen = Math.sqrt(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
+      if (rlen > 0.001) {
+        right[0]/=rlen; right[1]/=rlen; right[2]/=rlen;
+      }
+      const newUp = [
+        dy*right[2] - dz*right[1],
+        dz*right[0] - dx*right[2],
+        dx*right[1] - dy*right[0]
+      ];
+      
+      // Rotation matrix (column-major)
+      const rot = new Float32Array([
+        right[0], right[1], right[2], 0,
+        newUp[0], newUp[1], newUp[2], 0,
+        dx, dy, dz, 0,
+        0, 0, 0, 1
+      ]);
+      
+      const model = mat4Mul(mat4Translate(l.x, l.y, l.z), mat4Mul(rot, mat4Scale(0.06, 0.06, 0.22)));
+      drawModel(proj, view, model, [0.10, 1.00, 0.35]);
+    }
+
+    // Particles (confetti with spark-like glow)
+    for (const p of particles) {
+      const fade = Math.min(1, p.life * 2);
+      const glow = Math.pow(fade, 0.5);
+      const color = [p.color[0]*glow*2, p.color[1]*glow*2, p.color[2]*glow*2];
+      const spin = mat4RotateY(p.spin * (2 - p.life));
+      const model = mat4Mul(mat4Translate(p.x, p.y, p.z), mat4Mul(spin, mat4Scale(p.size, p.size*0.3, p.size)));
+      drawModel(proj, view, model, color);
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
