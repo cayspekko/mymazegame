@@ -1889,7 +1889,7 @@
           const dz = camera.z - boss.z;
           const dist = Math.hypot(dx, dz);
           if (dist > 0.05) {
-            const speed = (boss.enraged ? 2.5 : 0.8) * dt;
+            const speed = (boss.enraged ? 2.0 : 0.8) * dt;
             const nx = boss.x + (dx / dist) * speed;
             const nz = boss.z + (dz / dist) * speed;
             if (!collidesCircleWithWalls(nx, boss.z, 0.2)) boss.x = nx;
