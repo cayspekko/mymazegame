@@ -454,7 +454,9 @@
     shields = 0;
     sprint = 1.0;
     sprintCooldown = 0;
-    startTime = performance.now();
+    if (level === 1) {
+      startTime = performance.now();
+    }
     elapsedTime = 0;
     document.getElementById("win").style.display = "none";
     gameOverEl.style.display = "none";
