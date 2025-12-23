@@ -259,6 +259,8 @@
   let cubes = [];
   let diamonds = [];
   let bossDiamonds = [];
+  let turrets = [];
+  let enemyLasers = [];
   let bossHits = 0;
   const lasers = [];
   const particles = [];
@@ -276,6 +278,7 @@
   let debugVisible = false;
   let onWallTop = false;
   let screenShake = 0;
+  let infiniteLives = false;
 
   // Audio system
   const audio = new Audio();
@@ -289,7 +292,7 @@
     2: "https://cdn1.suno.ai/51cd966e-b21f-42f8-8234-1466ffc866de.mp3",
     3: "https://cdn1.suno.ai/ba24a7e1-a265-4211-bea2-ffdd260161ad.mp3",
     4: "https://cdn1.suno.ai/c359a76f-0251-4507-a3ca-0da04de36e2f.mp3",
-    // Add more tracks for levels 3 and 4 as needed
+    5: "https://cdn1.suno.ai/d2020642-5e6a-4559-b452-12c2cbe1b380.mp3",
   };
   
   // Sound effects system
@@ -398,7 +401,7 @@
 
   function initGame(level = 1) {
     currentLevel = level;
-    MAZE_SIZE = level === 1 ? 11 : level === 4 ? 31 : 15;
+    MAZE_SIZE = level === 1 ? 11 : (level === 4 || level === 5) ? 31 : 15;
     maze = generateMaze(MAZE_SIZE);
     ladders.length = 0;
     camera.x = 1.5; camera.y = 0.65; camera.z = 1.5; camera.pitch = 0;
@@ -433,6 +436,8 @@
     cubes.length = 0;
     diamonds.length = 0;
     bossDiamonds = [];
+    turrets = [];
+    enemyLasers = [];
     bossHits = 0;
     lasers.length = 0;
     particles.length = 0;
@@ -448,8 +453,8 @@
     gameOverEl.style.display = "none";
     canvas.classList.remove("grayscale");
     
-    if (currentLevel >= 2 && currentLevel !== 4) {
-      // Place ladders on walls (Level 2+)
+    if (currentLevel >= 2 && (currentLevel === 2 || currentLevel === 3 || currentLevel === 5)) {
+      // Place ladders on walls (Level 2, 3, 5)
       const FACE_OFFSET = 0.51;
       for (let z = 1; z < MAZE_SIZE - 1; z++) {
         for (let x = 1; x < MAZE_SIZE - 1; x++) {
@@ -528,8 +533,8 @@
       }
     }
     
-    if (currentLevel >= 2 && currentLevel !== 4) {
-      // Place collectibles on wall tops (Level 2+)
+    if (currentLevel >= 2 && (currentLevel === 2 || currentLevel === 3 || currentLevel === 5)) {
+      // Place collectibles on wall tops (Level 2, 3, 5)
       for (let z=0; z<MAZE_SIZE; z++) {
         for (let x=0; x<MAZE_SIZE; x++) {
           if (maze[z][x] !== 1) continue;
@@ -545,7 +550,7 @@
       }
     }
     
-    if (currentLevel >= 3 && currentLevel !== 4) {
+    if (currentLevel >= 3 && currentLevel !== 4 && currentLevel !== 5) {
       // Level 3: Add purple patrol diamonds (ground)
       for (let z=0; z<MAZE_SIZE; z++) {
         for (let x=0; x<MAZE_SIZE; x++) {
@@ -601,6 +606,95 @@
       }
       console.log('Spawned', bossDiamonds.length, 'boss diamonds');
     }
+    if (currentLevel === 5) {
+      // Level 5: 20% more objects than level 4
+      const mult = 0.75; // 20% more than level 4's 0.625
+      
+      // Ground collectibles
+      for (let z=0; z<MAZE_SIZE; z++) {
+        for (let x=0; x<MAZE_SIZE; x++) {
+          if (maze[z][x] !== 0) continue;
+          const px = x + 0.5, pz = z + 0.5;
+          if (!farEnough(px,pz)) continue;
+          const r = Math.random();
+          const balloonRate = 0.08 * mult;
+          const cubeRate = 0.14 * mult;
+          if (r < balloonRate) {
+            const isBlue = Math.random() < 0.5;
+            balloons.push({ x:px, y:0.95, z:pz, active:true, phase:Math.random()*6.28, onWall:false, blue:isBlue, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
+          } else if (r < cubeRate) cubes.push({ x:px, y:0.70, z:pz, active:true, rot:Math.random()*6.28, onWall:false });
+        }
+      }
+      
+      // Wall collectibles
+      for (let z=0; z<MAZE_SIZE; z++) {
+        for (let x=0; x<MAZE_SIZE; x++) {
+          if (maze[z][x] !== 1) continue;
+          const px = x + 0.5, pz = z + 0.5;
+          if (!farEnough(px,pz)) continue;
+          const r = Math.random();
+          if (r < 0.12 * mult) {
+            const isBlue = Math.random() < 0.5;
+            balloons.push({ x:px, y:1.95, z:pz, active:true, phase:Math.random()*6.28, onWall:true, blue:isBlue, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
+          } else if (r < 0.20 * mult) cubes.push({ x:px, y:1.70, z:pz, active:true, rot:Math.random()*6.28, onWall:true });
+        }
+      }
+      
+      // Diamonds (ground and wall)
+      for (let z=0; z<MAZE_SIZE; z++) {
+        for (let x=0; x<MAZE_SIZE; x++) {
+          if (maze[z][x] !== 0) continue;
+          const px = x + 0.5, pz = z + 0.5;
+          if (!farEnough(px,pz)) continue;
+          if (Math.random() < 0.08 * mult) {
+            diamonds.push({ x:px, y:0.70, z:pz, active:true, angle:Math.random()*6.28, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0, onWall:false });
+          }
+        }
+      }
+      for (let z=0; z<MAZE_SIZE; z++) {
+        for (let x=0; x<MAZE_SIZE; x++) {
+          if (maze[z][x] !== 1) continue;
+          const px = x + 0.5, pz = z + 0.5;
+          if (!farEnough(px,pz)) continue;
+          if (Math.random() < 0.06 * mult) {
+            diamonds.push({ x:px, y:1.70, z:pz, active:true, angle:Math.random()*6.28, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0, onWall:true });
+          }
+        }
+      }
+      
+      // Boss diamonds
+      const totalObjects = balloons.length + cubes.length + diamonds.length;
+      const bossCount = Math.max(4, Math.floor(totalObjects / 16)); // 20% more bosses
+      for (let i = 0; i < bossCount; i++) {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const x = Math.floor(Math.random() * (MAZE_SIZE - 2)) + 1;
+          const z = Math.floor(Math.random() * (MAZE_SIZE - 2)) + 1;
+          if (maze[z][x] === 0 && Math.hypot(x + 0.5 - 1.5, z + 0.5 - 1.5) > 5) {
+            bossDiamonds.push({ x: x + 0.5, y: 0.70, z: z + 0.5, active: true, angle: 0, hits: 0, enraged: false });
+            break;
+          }
+        }
+      }
+      
+      // Turrets on wall tops
+      const turretCount = Math.max(4, Math.floor(totalObjects / 35));
+      for (let i = 0; i < turretCount; i++) {
+        for (let attempt = 0; attempt < 200; attempt++) {
+          const x = Math.floor(Math.random() * MAZE_SIZE);
+          const z = Math.floor(Math.random() * MAZE_SIZE);
+          if (maze[z][x] === 1 && Math.hypot(x + 0.5 - 1.5, z + 0.5 - 1.5) > 8) {
+            // Check if spread out from other turrets
+            const tooClose = turrets.some(t => Math.hypot(t.x - (x + 0.5), t.z - (z + 0.5)) < 8);
+            if (!tooClose) {
+              turrets.push({ x: x + 0.5, y: 1.70, z: z + 0.5, shootTimer: Math.random() * 2, hits: 0 });
+              break;
+            }
+          }
+        }
+      }
+      
+      console.log('Level 5 spawned:', balloons.length, 'balloons,', cubes.length, 'cubes,', diamonds.length, 'diamonds,', bossDiamonds.length, 'bosses,', turrets.length, 'turrets');
+    }
     updateCounts();
     playLevelMusic(currentLevel);
   }
@@ -616,7 +710,7 @@
     if (e.code === "Space") e.preventDefault();
     
     if ((gameWon || gameOver) && e.code === "KeyR") {
-      const nextLevel = gameWon ? (currentLevel === 1 ? 2 : currentLevel === 2 ? 3 : currentLevel === 3 ? 4 : 1) : currentLevel;
+      const nextLevel = gameWon ? (currentLevel === 1 ? 2 : currentLevel === 2 ? 3 : currentLevel === 3 ? 4 : currentLevel === 4 ? 5 : 1) : currentLevel;
       initGame(nextLevel);
       canvas.requestPointerLock();
       return;
@@ -638,6 +732,10 @@
       initGame(4);
       return;
     }
+    if (debugVisible && e.code === "Digit5") {
+      initGame(5);
+      return;
+    }
     if (debugVisible && e.code === "Equal") {
       lives = Math.min(3, lives + 1);
       updateCounts();
@@ -653,12 +751,8 @@
       }
       return;
     }
-    if (debugVisible && e.code === "KeyB") {
-      if (currentLevel === 4) {
-        const dx = Math.sin(camera.yaw);
-        const dz = Math.cos(camera.yaw);
-        bossDiamonds.push({ x: camera.x + dx * 2, y: 0.70, z: camera.z + dz * 2, active: true, angle: 0, hits: 0, enraged: false });
-      }
+    if (debugVisible && e.code === "KeyI") {
+      infiniteLives = !infiniteLives;
       return;
     }
     if (resetPromptActive) {
@@ -1626,12 +1720,14 @@
           d.active = false;
           playSound("player_hurt");
           spawnExplosion(d.x, d.y, d.z);
-          lives--;
-          updateCounts();
+          if (!infiniteLives) {
+            lives--;
+            updateCounts();
+          }
           // Damage flash
           damageFlashEl.classList.add('active');
           setTimeout(() => damageFlashEl.classList.remove('active'), 200);
-          if (lives <= 0) {
+          if (lives <= 0 && !infiniteLives) {
             gameOver = true;
             canvas.classList.add("grayscale");
             setTimeout(() => { gameOverEl.style.display = "block"; }, 2000);
@@ -1640,8 +1736,70 @@
       }
     }
     
+    // turrets shoot at player (Level 5)
+    if (currentLevel === 5) {
+      for (const turret of turrets) {
+        turret.shootTimer -= dt;
+        const distToPlayer = Math.hypot(camera.x - turret.x, camera.z - turret.z);
+        if (distToPlayer <= 15.0 && turret.shootTimer <= 0 && onWallTop) {
+          // Shoot red laser at player
+          const dx = camera.x - turret.x;
+          const dz = camera.z - turret.z;
+          const dist = Math.hypot(dx, dz);
+          if (dist > 0.05) {
+            const dir = v3Normalize([dx / dist, 0, dz / dist]);
+            enemyLasers.push({
+              x: turret.x, y: turret.y, z: turret.z,
+              dx: dir[0], dy: 0, dz: dir[2],
+              life: 60
+            });
+            turret.shootTimer = 1.5 + Math.random() * 1.5; // 1.5-3 seconds
+          }
+        }
+      }
+    }
+    
+    // enemy lasers
+    for (let i=enemyLasers.length-1; i>=0; i--) {
+      const l = enemyLasers[i];
+      l.x += l.dx * dt * 7.5;
+      l.y += l.dy * dt * 7.5;
+      l.z += l.dz * dt * 7.5;
+      l.life -= dt;
+      
+      // hit player
+      const playerDist = Math.hypot(camera.x - l.x, camera.z - l.z);
+      const vertDist = Math.abs(camera.y - l.y);
+      if (playerDist < 0.3 && vertDist < 0.5) {
+        l.life = 0;
+        playSound("player_hurt");
+        spawnExplosion(l.x, l.y, l.z);
+        if (!infiniteLives) {
+          lives--;
+          updateCounts();
+        }
+        damageFlashEl.classList.add('active');
+        setTimeout(() => damageFlashEl.classList.remove('active'), 200);
+        if (lives <= 0 && !infiniteLives) {
+          gameOver = true;
+          canvas.classList.add("grayscale");
+          setTimeout(() => { gameOverEl.style.display = "block"; }, 2000);
+        }
+      }
+      
+      // die on wall
+      const mx = Math.floor(l.x), mz = Math.floor(l.z);
+      if (mx<0||mz<0||mx>=MAZE_SIZE||mz>=MAZE_SIZE) {
+        l.life = 0;
+      } else if (maze[mz][mx]===1 && l.y < 1.3) {
+        spawnLaserBreak(l.x, l.y, l.z);
+        l.life = 0;
+      }
+      
+      if (l.life <= 0) enemyLasers.splice(i,1);
+    }
     // boss diamonds heat-seeking
-    if (currentLevel === 4) {
+    if (currentLevel === 4 || currentLevel === 5) {
       let closestBossDist = Infinity;
       for (const boss of bossDiamonds) {
         if (!boss.active) continue;
@@ -1667,13 +1825,15 @@
           boss.active = false;
           playSound("player_hurt");
           spawnExplosion(boss.x, boss.y, boss.z);
-          screenShake = 0.5; // Screen shake for boss hit
-          lives -= 2; // Lose 2 lives for boss collision
-          lives = Math.max(0, lives); // Prevent negative lives
-          updateCounts();
+          screenShake = 0.5;
+          if (!infiniteLives) {
+            lives -= 2;
+            lives = Math.max(0, lives);
+            updateCounts();
+          }
           damageFlashEl.classList.add('active');
           setTimeout(() => damageFlashEl.classList.remove('active'), 200);
-          if (lives <= 0) {
+          if (lives <= 0 && !infiniteLives) {
             gameOver = true;
             canvas.classList.add("grayscale");
             setTimeout(() => { gameOverEl.style.display = "block"; }, 2000);
@@ -1716,7 +1876,37 @@
         for (const d of diamonds) {
           if (!d.active) continue;
           if (Math.hypot(l.x-d.x, l.y-d.y, l.z-d.z) < 0.3) {
-            playSound("absorbed_hit");
+            playSound("deflect_plink");
+            spawnLaserBreak(l.x, l.y, l.z);
+            l.life = 0;
+            break;
+          }
+        }
+      }
+      
+      // hit turrets (Level 5)
+      if (currentLevel === 5) {
+        for (let i = turrets.length - 1; i >= 0; i--) {
+          const turret = turrets[i];
+          const distToGun = Math.hypot(l.x - turret.x, l.y - (turret.y + 0.2), l.z - turret.z);
+          const distToDiamond = Math.hypot(l.x - turret.x, l.y - (turret.y + 0.35), l.z - turret.z);
+          
+          if (distToGun < 0.15 || distToDiamond < 0.15) {
+            // Hit weakspot (gun or diamond)
+            turret.hits++;
+            spawnLaserBreak(l.x, l.y, l.z);
+            l.life = 0;
+            if (turret.hits >= 3) {
+              playSound("explosion");
+              spawnExplosion(turret.x, turret.y, turret.z);
+              turrets.splice(i, 1);
+            } else {
+              playSound("absorbed_hit");
+            }
+            break;
+          } else if (Math.hypot(l.x - turret.x, l.z - turret.z) < 0.3 && l.y > turret.y - 0.2 && l.y < turret.y + 0.15) {
+            // Hit turret body - no damage
+            playSound("deflect_plink");
             spawnLaserBreak(l.x, l.y, l.z);
             l.life = 0;
             break;
@@ -1725,7 +1915,7 @@
       }
       
       // hit boss diamond
-      if (currentLevel === 4) {
+      if (currentLevel >= 4) {
         for (const boss of bossDiamonds) {
           if (!boss.active) continue;
           if (Math.hypot(l.x-boss.x, l.y-boss.y, l.z-boss.z) < 0.5) {
@@ -1750,14 +1940,14 @@
       if (mx<0||mz<0||mx>=MAZE_SIZE||mz>=MAZE_SIZE) {
         l.life = 0; // Out of bounds - silent disappear
       } else if (maze[mz][mx]===1 && l.y < 1.3) {
-        playSound("absorbed_hit");
+        playSound("deflect_plink");
         spawnLaserBreak(l.x, l.y, l.z);
         l.life = 0;
       }
       
       // die on ground
       if (l.y < 0.05) {
-        playSound("absorbed_hit");
+        playSound("deflect_plink");
         spawnLaserBreak(l.x, l.y, l.z);
         l.life = 0;
       }
@@ -1804,6 +1994,13 @@
           setTimeout(() => {
             document.getElementById("win").style.display = "none";
             initGame(4);
+          }, 2000);
+        } else if (currentLevel === 4) {
+          document.getElementById("win").innerHTML = 'LEVEL 4 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Loading Level 5...</span>';
+          document.getElementById("win").style.display = "block";
+          setTimeout(() => {
+            document.getElementById("win").style.display = "none";
+            initGame(5);
           }, 2000);
         } else {
           document.getElementById("win").innerHTML = 'YOU WIN!<br><span style="font-size: 20px; color: #aaa;">Press R to restart</span>';
@@ -1990,8 +2187,8 @@
       }
     }
     
-    // boss diamonds (Level 4)
-    if (currentLevel === 4) {
+    // boss diamonds (Level 4+)
+    if (currentLevel >= 4) {
       for (const boss of bossDiamonds) {
         if (!boss.active) continue;
         
@@ -2017,8 +2214,8 @@
       drawModel(proj, view, model, [0.25, 0.55, 1.00]);
     }
 
-    // ladders (Level 2-3)
-    if (currentLevel >= 2 && currentLevel !== 4) {
+    // ladders (Level 2, 3, 5)
+    if (currentLevel >= 2 && (currentLevel === 2 || currentLevel === 3 || currentLevel === 5)) {
       for (const l of ladders) {
         const base = mat4Mul(mat4Translate(l.x, 0.65, l.z), mat4RotateY(l.yaw));
         // Left rail (extended)
@@ -2033,7 +2230,69 @@
       }
     }
 
-    // lasers (oriented along travel direction)
+    // turrets (Level 5)
+    if (currentLevel === 5) {
+      for (const turret of turrets) {
+        const hitRatio = turret.hits / 3;
+        const baseColor = [0.3 + hitRatio * 0.4, 0.5 - hitRatio * 0.2, 0.3 - hitRatio * 0.1];
+        const topColor = [0.4 + hitRatio * 0.3, 0.6 - hitRatio * 0.3, 0.4 - hitRatio * 0.2];
+        
+        // Base platform (wider, flatter)
+        const baseModel = mat4Mul(mat4Translate(turret.x, turret.y - 0.15, turret.z), mat4Scale(0.5, 0.15, 0.5));
+        drawModel(proj, view, baseModel, baseColor);
+        
+        // Main body (taller, more defined)
+        const bodyModel = mat4Mul(mat4Translate(turret.x, turret.y + 0.05, turret.z), mat4Scale(0.3, 0.25, 0.3));
+        drawModel(proj, view, bodyModel, topColor);
+        
+        // Gun barrel (rotating)
+        const gunModel = mat4Mul(
+          mat4Translate(turret.x, turret.y + 0.2, turret.z),
+          mat4Mul(mat4RotateY(t * 1.5), mat4Scale(0.08, 0.08, 0.25))
+        );
+        drawModel(proj, view, gunModel, [0.2 + hitRatio * 0.3, 0.2, 0.2]);
+        
+        // Top sensor (spinning diamond)
+        const sensorModel = mat4Mul(
+          mat4Translate(turret.x, turret.y + 0.35, turret.z),
+          mat4Mul(mat4RotateY(t * 3), mat4Scale(0.12, 0.12, 0.12))
+        );
+        drawModel(proj, view, sensorModel, [0.8, 0.2 + hitRatio * 0.6, 0.2], false, true);
+      }
+    }
+    
+    // enemy lasers (red)
+    for (const l of enemyLasers) {
+      const len = Math.sqrt(l.dx*l.dx + l.dy*l.dy + l.dz*l.dz);
+      const dx = l.dx/len, dy = l.dy/len, dz = l.dz/len;
+      
+      const up = [0, 1, 0];
+      const right = [
+        up[1]*dz - up[2]*dy,
+        up[2]*dx - up[0]*dz,
+        up[0]*dy - up[1]*dx
+      ];
+      const rlen = Math.sqrt(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
+      if (rlen > 0.001) {
+        right[0]/=rlen; right[1]/=rlen; right[2]/=rlen;
+      }
+      const newUp = [
+        dy*right[2] - dz*right[1],
+        dz*right[0] - dx*right[2],
+        dx*right[1] - dy*right[0]
+      ];
+      
+      const rot = new Float32Array([
+        right[0], right[1], right[2], 0,
+        newUp[0], newUp[1], newUp[2], 0,
+        dx, dy, dz, 0,
+        0, 0, 0, 1
+      ]);
+      
+      const model = mat4Mul(mat4Translate(l.x, l.y, l.z), mat4Mul(rot, mat4Scale(0.06, 0.06, 0.22)));
+      drawModel(proj, view, model, [1.0, 0.2, 0.2]);
+    }
+    // player lasers (oriented along travel direction)
     for (const l of lasers) {
       // Create rotation matrix to align laser with its direction
       const len = Math.sqrt(l.dx*l.dx + l.dy*l.dy + l.dz*l.dz);
