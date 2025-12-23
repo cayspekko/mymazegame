@@ -279,6 +279,8 @@
   let onWallTop = false;
   let screenShake = 0;
   let infiniteLives = false;
+  let medkits = 0;
+  let shields = 0;
 
   // Audio system
   const audio = new Audio();
@@ -372,7 +374,11 @@
     levelEl.textContent = currentLevel;
     climbHintEl.style.display = currentLevel >= 2 ? "inline" : "none";
     livesEl.style.display = currentLevel >= 3 ? "block" : "none";
-    if (currentLevel >= 3) livesEl.textContent = "Lives: " + "❤".repeat(lives);
+    if (currentLevel >= 3) {
+      const medkitIcon = medkits > 0 ? ` +${medkits}` : '';
+      const shieldIcon = shields > 0 ? ` 🟢${shields}` : '';
+      livesEl.innerHTML = "Lives: " + "❤".repeat(lives) + medkitIcon + '<span style="color: #0f0;">' + shieldIcon + '</span>';
+    }
   }
   
   function formatTime(seconds) {
@@ -445,6 +451,7 @@
     gameOver = false;
     lives = 3;
     laserAmmo = 3;
+    shields = 0;
     sprint = 1.0;
     sprintCooldown = 0;
     startTime = performance.now();
@@ -499,7 +506,15 @@
         if (r < balloonRate) {
           const isBlue = currentLevel >= 3 && Math.random() < 0.5;
           balloons.push({ x:px, y:0.95, z:pz, active:true, phase:Math.random()*6.28, onWall:false, blue:isBlue, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
-        } else if (r < cubeRate) cubes.push({ x:px, y:0.70, z:pz, active:true, rot:Math.random()*6.28, onWall:false });
+        } else if (r < cubeRate) {
+          let powerup = null;
+          if (currentLevel === 5 && Math.random() < 0.15) {
+            powerup = Math.random() < 0.5 ? 'shields' : 'medkit';
+          } else if (currentLevel >= 3 && Math.random() < 0.15) {
+            powerup = 'medkit';
+          }
+          cubes.push({ x:px, y:0.70, z:pz, active:true, rot:Math.random()*6.28, onWall:false, powerup });
+        }
       }
     }
     
@@ -545,7 +560,15 @@
           if (r < 0.12 * mult) {
             const isBlue = currentLevel >= 3 && Math.random() < 0.5;
             balloons.push({ x:px, y:1.95, z:pz, active:true, phase:Math.random()*6.28, onWall:true, blue:isBlue, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
-          } else if (r < 0.20 * mult) cubes.push({ x:px, y:1.70, z:pz, active:true, rot:Math.random()*6.28, onWall:true });
+          } else if (r < 0.20 * mult) {
+            let powerup = null;
+            if (currentLevel === 5 && Math.random() < 0.15) {
+              powerup = Math.random() < 0.5 ? 'shields' : 'medkit';
+            } else if (currentLevel >= 3 && Math.random() < 0.15) {
+              powerup = 'medkit';
+            }
+            cubes.push({ x:px, y:1.70, z:pz, active:true, rot:Math.random()*6.28, onWall:true, powerup });
+          }
         }
       }
     }
@@ -622,7 +645,13 @@
           if (r < balloonRate) {
             const isBlue = Math.random() < 0.5;
             balloons.push({ x:px, y:0.95, z:pz, active:true, phase:Math.random()*6.28, onWall:false, blue:isBlue, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
-          } else if (r < cubeRate) cubes.push({ x:px, y:0.70, z:pz, active:true, rot:Math.random()*6.28, onWall:false });
+          } else if (r < cubeRate) {
+            let powerup = null;
+            if (Math.random() < 0.15) {
+              powerup = Math.random() < 0.5 ? 'shields' : 'medkit';
+            }
+            cubes.push({ x:px, y:0.70, z:pz, active:true, rot:Math.random()*6.28, onWall:false, powerup });
+          }
         }
       }
       
@@ -636,7 +665,13 @@
           if (r < 0.12 * mult) {
             const isBlue = Math.random() < 0.5;
             balloons.push({ x:px, y:1.95, z:pz, active:true, phase:Math.random()*6.28, onWall:true, blue:isBlue, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
-          } else if (r < 0.20 * mult) cubes.push({ x:px, y:1.70, z:pz, active:true, rot:Math.random()*6.28, onWall:true });
+          } else if (r < 0.20 * mult) {
+            let powerup = null;
+            if (Math.random() < 0.15) {
+              powerup = Math.random() < 0.5 ? 'shields' : 'medkit';
+            }
+            cubes.push({ x:px, y:1.70, z:pz, active:true, rot:Math.random()*6.28, onWall:true, powerup });
+          }
         }
       }
       
@@ -753,6 +788,13 @@
     }
     if (debugVisible && e.code === "KeyI") {
       infiniteLives = !infiniteLives;
+      return;
+    }
+    if (e.code === "KeyE" && medkits > 0 && lives < 3) {
+      medkits--;
+      lives = 3;
+      updateCounts();
+      playSound("health_gain");
       return;
     }
     if (resetPromptActive) {
@@ -900,6 +942,8 @@
 
     uniform vec3 u_laserPos[8];
     uniform int u_laserCount;
+    uniform vec3 u_enemyLaserPos[8];
+    uniform int u_enemyLaserCount;
     uniform vec3 u_balloonPos[8];
     uniform int u_balloonCount;
     uniform vec3 u_cubePos[8];
@@ -953,6 +997,19 @@
         }
       }
 
+      // Enemy laser glow (red)
+      vec3 enemyLaserGlow = vec3(0.0);
+      for (int i = 0; i < 8; i++) {
+        if (i >= u_enemyLaserCount) break;
+        vec3 Ll = u_enemyLaserPos[i] - P;
+        float ldist = length(Ll);
+        if (ldist < 2.5) {
+          float lDiff = max(dot(N, normalize(Ll)), 0.0) * 0.3 + 0.7;
+          float lAtten = exp(-ldist * 1.2) * (1.0 / (1.0 + ldist * 0.5));
+          enemyLaserGlow += lDiff * vec3(1.0, 0.1, 0.1) * lAtten * 0.9;
+        }
+      }
+
       // Balloon glow (red)
       vec3 balloonGlow = vec3(0.0);
       for (int i = 0; i < 8; i++) {
@@ -987,7 +1044,7 @@
       float edge = pow(abs(dot(N, vec3(0.0,1.0,0.0))), 0.35);
       float aoFactor = mix(0.7, 1.0, edge);
 
-      vec3 col = (ambient + diffuse + pointLight + laserGlow + balloonGlow + cubeGlow + bounce + 0.35*specular) * aoFactor;
+      vec3 col = (ambient + diffuse + pointLight + laserGlow + enemyLaserGlow + balloonGlow + cubeGlow + bounce + 0.35*specular) * aoFactor;
 
       // Distance fog with galaxy
       float fogDist = length(u_camPos - P);
@@ -1022,6 +1079,8 @@
   const locPointColor = gl.getUniformLocation(program, "u_pointColor");
   const locLaserPos = gl.getUniformLocation(program, "u_laserPos");
   const locLaserCount = gl.getUniformLocation(program, "u_laserCount");
+  const locEnemyLaserPos = gl.getUniformLocation(program, "u_enemyLaserPos");
+  const locEnemyLaserCount = gl.getUniformLocation(program, "u_enemyLaserCount");
   const locBalloonPos = gl.getUniformLocation(program, "u_balloonPos");
   const locBalloonCount = gl.getUniformLocation(program, "u_balloonCount");
   const locCubePos = gl.getUniformLocation(program, "u_cubePos");
@@ -1614,7 +1673,15 @@
       const vertDist = Math.abs(camera.y - baseY);
       if (Math.hypot(camera.x - c.x, camera.z - c.z) < 0.45 && vertDist < 0.5) {
         c.active = false;
-        playSound("pickup");
+        if (c.powerup === 'medkit') {
+          medkits = Math.min(3, medkits + 1);
+          playSound("health_gain");
+        } else if (c.powerup === 'shields') {
+          shields = 3;
+          playSound("shields_up");
+        } else {
+          playSound("pickup");
+        }
         updateCounts();
       }
     }
@@ -1772,18 +1839,27 @@
       const vertDist = Math.abs(camera.y - l.y);
       if (playerDist < 0.3 && vertDist < 0.5) {
         l.life = 0;
-        playSound("player_hurt");
-        spawnExplosion(l.x, l.y, l.z);
-        if (!infiniteLives) {
-          lives--;
+        if (shields > 0) {
+          // Shield absorbs the hit
+          shields--;
+          playSound("absorbed_hit");
+          spawnLaserBreak(l.x, l.y, l.z);
           updateCounts();
-        }
-        damageFlashEl.classList.add('active');
-        setTimeout(() => damageFlashEl.classList.remove('active'), 200);
-        if (lives <= 0 && !infiniteLives) {
-          gameOver = true;
-          canvas.classList.add("grayscale");
-          setTimeout(() => { gameOverEl.style.display = "block"; }, 2000);
+        } else {
+          // No shield, take damage
+          playSound("player_hurt");
+          spawnExplosion(l.x, l.y, l.z);
+          if (!infiniteLives) {
+            lives--;
+            updateCounts();
+          }
+          damageFlashEl.classList.add('active');
+          setTimeout(() => damageFlashEl.classList.remove('active'), 200);
+          if (lives <= 0 && !infiniteLives) {
+            gameOver = true;
+            canvas.classList.add("grayscale");
+            setTimeout(() => { gameOverEl.style.display = "block"; }, 2000);
+          }
         }
       }
       
@@ -1893,15 +1969,22 @@
           
           if (distToGun < 0.15 || distToDiamond < 0.15) {
             // Hit weakspot (gun or diamond)
-            turret.hits++;
-            spawnLaserBreak(l.x, l.y, l.z);
-            l.life = 0;
-            if (turret.hits >= 3) {
-              playSound("explosion");
-              spawnExplosion(turret.x, turret.y, turret.z);
-              turrets.splice(i, 1);
+            if (onWallTop) {
+              turret.hits++;
+              spawnLaserBreak(l.x, l.y, l.z);
+              l.life = 0;
+              if (turret.hits >= 3) {
+                playSound("explosion");
+                spawnExplosion(turret.x, turret.y, turret.z);
+                turrets.splice(i, 1);
+              } else {
+                playSound("absorbed_hit");
+              }
             } else {
-              playSound("absorbed_hit");
+              // On ground level - no damage to weakspots
+              playSound("deflect_plink");
+              spawnLaserBreak(l.x, l.y, l.z);
+              l.life = 0;
             }
             break;
           } else if (Math.hypot(l.x - turret.x, l.z - turret.z) < 0.3 && l.y > turret.y - 0.2 && l.y < turret.y + 0.15) {
@@ -1923,7 +2006,7 @@
             boss.enraged = true;
             spawnLaserBreak(l.x, l.y, l.z);
             l.life = 0;
-            if (boss.hits >= 9) {
+            if (boss.hits >= 6) {
               boss.active = false;
               playSound("explosion");
               spawnExplosion(boss.x, boss.y, boss.z);
@@ -2115,6 +2198,17 @@
     gl.uniform3fv(locLaserPos, laserPositions);
     gl.uniform1i(locLaserCount, laserCount);
 
+    // enemy laser positions for glow
+    const enemyLaserPositions = new Float32Array(24);
+    const enemyLaserCount = Math.min(enemyLasers.length, 8);
+    for (let i = 0; i < enemyLaserCount; i++) {
+      enemyLaserPositions[i*3] = enemyLasers[i].x;
+      enemyLaserPositions[i*3+1] = enemyLasers[i].y;
+      enemyLaserPositions[i*3+2] = enemyLasers[i].z;
+    }
+    gl.uniform3fv(locEnemyLaserPos, enemyLaserPositions);
+    gl.uniform1i(locEnemyLaserCount, enemyLaserCount);
+
     // balloon positions for glow
     const balloonPositions = new Float32Array(24);
     const activeBalloons = balloons.filter(b => b.active);
@@ -2196,7 +2290,7 @@
           mat4Translate(boss.x, boss.y, boss.z),
           mat4Mul(mat4RotateY(boss.angle*(gameOver ? 0.3 : 1)), mat4Scale(0.8, 0.8, 0.8))
         );
-        const hitRatio = boss.hits / 9;
+        const hitRatio = boss.hits / 6;
         const color = [0.5 + hitRatio * 0.5, 0.5 - hitRatio * 0.3, 0.5 - hitRatio * 0.3];
         drawModel(proj, view, model, color, false, true);
       }
@@ -2211,7 +2305,13 @@
         mat4Translate(c.x, bob, c.z),
         mat4Mul(mat4RotateY(c.rot*(gameOver ? 0.3 : 1)), mat4Mul(mat4RotateX(-0.35), mat4Scale(0.18, 0.18, 0.18)))
       );
-      drawModel(proj, view, model, [0.25, 0.55, 1.00]);
+      let color = [0.25, 0.55, 1.00]; // Default blue
+      if (c.powerup === 'medkit') {
+        color = [1.0, 0.1, 0.1]; // Red for medkit
+      } else if (c.powerup === 'shields') {
+        color = [0.1, 1.0, 0.1]; // Green for shields
+      }
+      drawModel(proj, view, model, color);
     }
 
     // ladders (Level 2, 3, 5)
@@ -2289,8 +2389,8 @@
         0, 0, 0, 1
       ]);
       
-      const model = mat4Mul(mat4Translate(l.x, l.y, l.z), mat4Mul(rot, mat4Scale(0.06, 0.06, 0.22)));
-      drawModel(proj, view, model, [1.0, 0.2, 0.2]);
+      const model = mat4Mul(mat4Translate(l.x, l.y, l.z), mat4Mul(rot, mat4Scale(0.08, 0.08, 0.35)));
+      drawModel(proj, view, model, [2.0, 0.4, 0.4]);
     }
     // player lasers (oriented along travel direction)
     for (const l of lasers) {
