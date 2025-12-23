@@ -43,7 +43,7 @@
     #laserFill { height: 100%; width: 100%; background: linear-gradient(90deg, #0f0 0%, #0a0 100%); transition: width 0.1s; }
     #debug { position: absolute; top: 10px; right: 10px; color: #0f0; font-family: monospace; font-size: 12px; text-shadow: 1px 1px 3px #000; background: rgba(0,0,0,0.5); padding: 10px; white-space: pre; }
     #win { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0f0; font-family: monospace; font-size: 48px; display: none; text-shadow: 2px 2px 10px #000; text-align: center; }
-    #resetPrompt { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 30px; color: #fff; font-family: monospace; font-size: 20px; display: none; text-align: center; border: 2px solid #0f0; }
+    #resetPrompt { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 30px; color: #fff; font-family: monospace; font-size: 20px; display: none; text-align: center; border: 2px solid #0f0; z-index: 200; }
     #gameOver { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #f00; font-family: monospace; font-size: 48px; display: none; text-shadow: 2px 2px 10px #000; text-align: center; z-index: 100; }
     #lives { position: absolute; top: 50px; left: 10px; color: #f00; font-family: monospace; font-size: 18px; text-shadow: 2px 2px 6px #000; }
     canvas.grayscale { filter: grayscale(100%); transition: filter 2s; }
@@ -275,6 +275,7 @@
   let elapsedTime = 0;
   let debugVisible = false;
   let onWallTop = false;
+  let screenShake = 0;
 
   // Audio system
   const audio = new Audio();
@@ -642,11 +643,29 @@
       updateCounts();
       return;
     }
+    if (debugVisible && e.code === "Minus") {
+      lives = Math.max(0, lives - 1);
+      updateCounts();
+      if (lives <= 0 && !gameOver) {
+        gameOver = true;
+        canvas.classList.add("grayscale");
+        setTimeout(() => { gameOverEl.style.display = "block"; }, 2000);
+      }
+      return;
+    }
+    if (debugVisible && e.code === "KeyB") {
+      if (currentLevel === 4) {
+        const dx = Math.sin(camera.yaw);
+        const dz = Math.cos(camera.yaw);
+        bossDiamonds.push({ x: camera.x + dx * 2, y: 0.70, z: camera.z + dz * 2, active: true, angle: 0, hits: 0, enraged: false });
+      }
+      return;
+    }
     if (resetPromptActive) {
       if (e.code === "KeyR") {
         resetPromptActive = false;
         resetPromptEl.style.display = "none";
-        initGame(currentLevel);
+        initGame(1); // Reset to level 1 from pause menu
         canvas.requestPointerLock();
       }
       return;
@@ -1102,15 +1121,28 @@
   function updateDebug() {
     const mx = Math.floor(camera.x), mz = Math.floor(camera.z);
     let grid = '';
-    for (let z = mz - 2; z <= mz + 2; z++) {
-      for (let x = mx - 2; x <= mx + 2; x++) {
-        if (x === mx && z === mz) grid += 'P';
-        else if (x < 0 || z < 0 || x >= MAZE_SIZE || z >= MAZE_SIZE) grid += '?';
-        else {
-          const hasLadder = currentLevel >= 2 && ladders.some(l => Math.floor(l.x) === x && Math.floor(l.z) === z);
-          if (hasLadder) grid += 'L';
-          else grid += maze[z][x] === 0 ? '.' : '#';
+    for (let z = mz - 5; z <= mz + 4; z++) {
+      for (let x = mx - 5; x <= mx + 4; x++) {
+        let char = '?';
+        if (x >= 0 && z >= 0 && x < MAZE_SIZE && z < MAZE_SIZE) {
+          if (x === mx && z === mz) {
+            char = 'P';
+          } else {
+            // Check for objects first
+            const hasBalloon = balloons.some(b => b.active && Math.floor(b.x) === x && Math.floor(b.z) === z);
+            const hasCube = cubes.some(c => c.active && Math.floor(c.x) === x && Math.floor(c.z) === z);
+            const hasDanger = diamonds.some(d => d.active && Math.floor(d.x) === x && Math.floor(d.z) === z) || 
+                             bossDiamonds.some(bd => bd.active && Math.floor(bd.x) === x && Math.floor(bd.z) === z);
+            const hasLadder = currentLevel >= 2 && ladders.some(l => Math.floor(l.x) === x && Math.floor(l.z) === z);
+            
+            if (hasDanger) char = '!';
+            else if (hasBalloon) char = 'B';
+            else if (hasCube) char = 'C';
+            else if (hasLadder) char = 'L';
+            else char = maze[z][x] === 0 ? '.' : '#';
+          }
         }
+        grid += char;
       }
       grid += '\n';
     }
@@ -1214,6 +1246,13 @@
   }
 
   function update(dt, t) {
+    // Update screen shake (always, even during game over)
+    if (screenShake > 0) {
+      const shakeDecay = gameOver ? dt * 0.6 : dt * 2; // Slower decay during game over
+      screenShake -= shakeDecay;
+      if (screenShake < 0) screenShake = 0;
+    }
+    
     if (gameOver) {
       // During game over, only update particles with slow motion
       const slowDt = dt * 0.3;
@@ -1230,6 +1269,10 @@
       }
       return;
     }
+    
+    // Pause when not in pointer lock (escape pressed)
+    if (document.pointerLockElement !== canvas) return;
+    
     if (!gameWon) {
       elapsedTime = (performance.now() - startTime) / 1000;
       timerEl.textContent = formatTime(elapsedTime);
@@ -1624,7 +1667,9 @@
           boss.active = false;
           playSound("player_hurt");
           spawnExplosion(boss.x, boss.y, boss.z);
-          lives--;
+          screenShake = 0.5; // Screen shake for boss hit
+          lives -= 2; // Lose 2 lives for boss collision
+          lives = Math.max(0, lives); // Prevent negative lives
           updateCounts();
           damageFlashEl.classList.add('active');
           setTimeout(() => damageFlashEl.classList.remove('active'), 200);
@@ -1733,6 +1778,8 @@
       if (p.life <= 0 || p.y < 0.05) particles.splice(i, 1);
     }
 
+
+
     if (balloons.every(b=>!b.active) && cubes.every(c=>!c.active)) {
       if (!gameWon) {
         gameWon = true;
@@ -1839,9 +1886,18 @@
 
     const cp=Math.cos(camera.pitch), sp=Math.sin(camera.pitch);
     const cy=Math.cos(camera.yaw),   sy=Math.sin(camera.yaw);
+    
+    // Apply screen shake
+    let shakeX = 0, shakeY = 0;
+    if (screenShake > 0) {
+      const intensity = screenShake * 0.15; // Much more dramatic
+      shakeX = (Math.random() - 0.5) * intensity;
+      shakeY = (Math.random() - 0.5) * intensity;
+    }
+    
     const forward = [sy*cp, sp, cy*cp];
-    const eye = [camera.x, camera.y, camera.z];
-    const target = [camera.x + forward[0], camera.y + forward[1], camera.z + forward[2]];
+    const eye = [camera.x + shakeX, camera.y + shakeY, camera.z];
+    const target = [camera.x + forward[0] + shakeX, camera.y + forward[1] + shakeY, camera.z + forward[2]];
     const view = mat4LookAt(eye, target, [0,1,0]);
 
     // lights
