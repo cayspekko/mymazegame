@@ -267,6 +267,8 @@
   let gameOver = false;
   let lives = 3;
   let laserAmmo = 3;
+  let isHolding = false;
+  let holdStartTime = 0;
   let sprint = 1.0;
   let sprintCooldown = 0;
   let startTime = 0;
@@ -395,7 +397,7 @@
 
   function initGame(level = 1) {
     currentLevel = level;
-    MAZE_SIZE = level === 4 ? 31 : 15;
+    MAZE_SIZE = level === 1 ? 11 : level === 4 ? 31 : 15;
     maze = generateMaze(MAZE_SIZE);
     ladders.length = 0;
     camera.x = 1.5; camera.y = 0.65; camera.z = 1.5; camera.pitch = 0;
@@ -635,12 +637,28 @@
       resetPromptActive = false;
       resetPromptEl.style.display = "none";
       canvas.requestPointerLock();
+      if (audioEnabled && musicTracks[currentLevel]) {
+        audio.play().catch(e => console.log('Audio resume failed:', e));
+      }
     } else if (document.pointerLockElement === canvas) {
-      shoot();
+      shoot(false); // Normal shot
+      isHolding = true;
+      holdStartTime = performance.now();
     } else {
       pendingShoot = true;
       canvas.requestPointerLock();
     }
+  });
+
+  canvas.addEventListener("pointerup", e => {
+    if (e.button !== 0) return;
+    if (isHolding && document.pointerLockElement === canvas) {
+      const holdTime = (performance.now() - holdStartTime) / 1000;
+      if (holdTime >= 0.5 && laserAmmo >= 3) {
+        shoot(true); // Shotgun blast
+      }
+    }
+    isHolding = false;
   });
 
   document.addEventListener("pointerlockchange", () => {
@@ -664,22 +682,43 @@
     camera.pitch = Math.max(-1.2, Math.min(1.2, camera.pitch));
   });
 
-  function shoot() {
+  function shoot(shotgun = false) {
     if (laserAmmo < 1) return;
-    laserAmmo = Math.max(0, laserAmmo - 1);
+    
+    if (shotgun) {
+      laserAmmo = 0; // Deplete all ammo
+    } else {
+      laserAmmo = Math.max(0, laserAmmo - 1);
+    }
     laserFillEl.style.width = (laserAmmo / 3 * 100) + "%";
     
     playSound("laser");
     
     const cp = Math.cos(camera.pitch), sp = Math.sin(camera.pitch);
     const cy = Math.cos(camera.yaw),   sy = Math.sin(camera.yaw);
-    // Forward in our coordinate convention
-    const dir = v3Normalize([sy*cp, sp, cy*cp]);
-    lasers.push({
-      x: camera.x, y: camera.y, z: camera.z,
-      dx: dir[0], dy: dir[1], dz: dir[2],
-      life: 60
-    });
+    
+    if (shotgun) {
+      // Shotgun spread: center + left + right (tighter spread)
+      const angles = [0, -0.08, 0.08];
+      angles.forEach(angleOffset => {
+        const yaw = camera.yaw + angleOffset;
+        const cyo = Math.cos(yaw), syo = Math.sin(yaw);
+        const dir = v3Normalize([syo*cp, sp, cyo*cp]);
+        lasers.push({
+          x: camera.x, y: camera.y, z: camera.z,
+          dx: dir[0], dy: dir[1], dz: dir[2],
+          life: 60
+        });
+      });
+    } else {
+      // Single shot
+      const dir = v3Normalize([sy*cp, sp, cy*cp]);
+      lasers.push({
+        x: camera.x, y: camera.y, z: camera.z,
+        dx: dir[0], dy: dir[1], dz: dir[2],
+        life: 60
+      });
+    }
   }
 
   // ---------- Shaders (better lighting) ----------
@@ -1188,6 +1227,17 @@
       laserFillEl.style.width = (laserAmmo / 3 * 100) + "%";
     }
     
+    // Charge shot visual feedback
+    if (isHolding && laserAmmo >= 3) {
+      const holdTime = (performance.now() - holdStartTime) / 1000;
+      if (holdTime >= 0.5) {
+        const blink = Math.sin(t * 20) > 0;
+        laserFillEl.style.opacity = blink ? "1" : "0.3";
+      }
+    } else {
+      laserFillEl.style.opacity = "1";
+    }
+    
     const canSprint = isSprinting && sprint > 0;
     const speedMult = canSprint ? 2.0 : 1.0;
     const moveSpeed = 2.4 * speedMult;
@@ -1656,15 +1706,30 @@
         gameWon = true;
         addTime(elapsedTime);
         if (currentLevel === 1) {
-          document.getElementById("win").innerHTML = 'LEVEL 1 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Press R for Level 2</span>';
+          document.getElementById("win").innerHTML = 'LEVEL 1 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Loading Level 2...</span>';
+          document.getElementById("win").style.display = "block";
+          setTimeout(() => {
+            document.getElementById("win").style.display = "none";
+            initGame(2);
+          }, 2000);
         } else if (currentLevel === 2) {
-          document.getElementById("win").innerHTML = 'LEVEL 2 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Press R for Level 3</span>';
+          document.getElementById("win").innerHTML = 'LEVEL 2 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Loading Level 3...</span>';
+          document.getElementById("win").style.display = "block";
+          setTimeout(() => {
+            document.getElementById("win").style.display = "none";
+            initGame(3);
+          }, 2000);
         } else if (currentLevel === 3) {
-          document.getElementById("win").innerHTML = 'LEVEL 3 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Press R for Level 4</span>';
+          document.getElementById("win").innerHTML = 'LEVEL 3 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Loading Level 4...</span>';
+          document.getElementById("win").style.display = "block";
+          setTimeout(() => {
+            document.getElementById("win").style.display = "none";
+            initGame(4);
+          }, 2000);
         } else {
-          document.getElementById("win").innerHTML = 'YOU WIN!<br><span style="font-size: 20px; color: #aaa;">Press R to reset</span>';
+          document.getElementById("win").innerHTML = 'YOU WIN!<br><span style="font-size: 20px; color: #aaa;">Press R to restart</span>';
+          document.getElementById("win").style.display = "block";
         }
-        document.getElementById("win").style.display = "block";
       }
     }
   }
