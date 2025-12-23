@@ -497,6 +497,36 @@
       }
     }
     
+    // Ensure minimum collectibles for level 1
+    if (currentLevel === 1) {
+      while (balloons.filter(b => b.active).length < 2) {
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const x = Math.floor(Math.random() * MAZE_SIZE);
+          const z = Math.floor(Math.random() * MAZE_SIZE);
+          if (maze[z][x] === 0) {
+            const px = x + 0.5, pz = z + 0.5;
+            if (farEnough(px, pz)) {
+              balloons.push({ x:px, y:0.95, z:pz, active:true, phase:Math.random()*6.28, onWall:false, blue:false, baseX:px, baseZ:pz, targetX:px, targetZ:pz, moveTimer:0 });
+              break;
+            }
+          }
+        }
+      }
+      while (cubes.filter(c => c.active).length < 2) {
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const x = Math.floor(Math.random() * MAZE_SIZE);
+          const z = Math.floor(Math.random() * MAZE_SIZE);
+          if (maze[z][x] === 0) {
+            const px = x + 0.5, pz = z + 0.5;
+            if (farEnough(px, pz)) {
+              cubes.push({ x:px, y:0.70, z:pz, active:true, rot:Math.random()*6.28, onWall:false });
+              break;
+            }
+          }
+        }
+      }
+    }
+    
     if (currentLevel >= 2 && currentLevel !== 4) {
       // Place collectibles on wall tops (Level 2+)
       for (let z=0; z<MAZE_SIZE; z++) {
@@ -1672,7 +1702,9 @@
 
       // die on wall (but not if laser is above wall height)
       const mx = Math.floor(l.x), mz = Math.floor(l.z);
-      if (mx<0||mz<0||mx>=MAZE_SIZE||mz>=MAZE_SIZE || (maze[mz][mx]===1 && l.y < 1.3)) {
+      if (mx<0||mz<0||mx>=MAZE_SIZE||mz>=MAZE_SIZE) {
+        l.life = 0; // Out of bounds - silent disappear
+      } else if (maze[mz][mx]===1 && l.y < 1.3) {
         playSound("absorbed_hit");
         spawnLaserBreak(l.x, l.y, l.z);
         l.life = 0;
