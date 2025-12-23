@@ -277,17 +277,27 @@
   // Audio system
   const audio = new Audio();
   audio.loop = true;
-  audio.volume = 0.3;
+  audio.volume = 0.2;
   let currentMusicLevel = 0;
+  let audioEnabled = false;
   
   const musicTracks = {
-    1: "https://cdn1.suno.ai/6e448019-a2a4-44b0-be42-a8af252a99d3.mp3",
-    2: "https://cdn1.suno.ai/6e448019-a2a4-44b0-be42-a8af252a99d3.mp3",
+    1: "https://cdn1.suno.ai/51cd966e-b21f-42f8-8234-1466ffc866de.mp3",
+    2: "https://cdn1.suno.ai/51cd966e-b21f-42f8-8234-1466ffc866de.mp3",
+    3: "https://cdn1.suno.ai/ba24a7e1-a265-4211-bea2-ffdd260161ad.mp3",
+    4: "https://cdn1.suno.ai/c359a76f-0251-4507-a3ca-0da04de36e2f.mp3",
     // Add more tracks for levels 3 and 4 as needed
   };
   
   // Sound effects system
   let audioBasePath = "assets/"; // Change to CDN path when published
+  
+  function enableAudio() {
+    if (!audioEnabled) {
+      audioEnabled = true;
+      playLevelMusic(currentLevel);
+    }
+  }
   
   function playSound(name) {
     const sfx = new Audio();
@@ -300,7 +310,7 @@
   }
   
   function playLevelMusic(level) {
-    if (currentMusicLevel === level) return;
+    if (!audioEnabled || currentMusicLevel === level) return;
     currentMusicLevel = level;
     
     if (musicTracks[level]) {
@@ -620,6 +630,7 @@
   canvas.addEventListener("pointerdown", e => {
     if (e.button !== 0) return;
     e.preventDefault();
+    enableAudio();
     if (resetPromptActive) {
       resetPromptActive = false;
       resetPromptEl.style.display = "none";
@@ -642,6 +653,7 @@
       pendingShoot = false;
       resetPromptActive = true;
       resetPromptEl.style.display = "block";
+      audio.pause();
     }
   });
 
