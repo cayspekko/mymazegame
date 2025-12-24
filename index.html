@@ -2,6 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>3D Maze Game (fixed)</title>
   <style>
     html, body { 
@@ -28,7 +29,7 @@
       opacity: 0.4;
       pointer-events: none;
     }
-    canvas { display: block; width: 100vw; height: 100vh; cursor: none; }
+    canvas { display: block; width: 100vw; height: 100vh; cursor: none; touch-action: none; }
     #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; }
     #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(0, 255, 100, 0.6); box-shadow: 0 0 4px rgba(0, 255, 100, 0.8); }
     #crosshair::before { width: 2px; height: 12px; left: 50%; top: 50%; transform: translate(-50%, -50%); }
@@ -43,13 +44,38 @@
     #laserFill { height: 100%; width: 100%; background: linear-gradient(90deg, #0f0 0%, #0a0 100%); transition: width 0.1s; }
     #debug { position: absolute; top: 10px; right: 10px; color: #0f0; font-family: monospace; font-size: 12px; text-shadow: 1px 1px 3px #000; background: rgba(0,0,0,0.5); padding: 10px; white-space: pre; }
     #win { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0f0; font-family: monospace; font-size: 48px; display: none; text-shadow: 2px 2px 10px #000; text-align: center; }
-    #resetPrompt { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 30px; color: #fff; font-family: monospace; font-size: 20px; display: none; text-align: center; border: 2px solid #0f0; z-index: 200; }
+    #resetPrompt { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 30px; color: #fff; font-family: monospace; font-size: 20px; display: none; text-align: center; border: 2px solid #0f0; z-index: 200; pointer-events: auto; cursor: pointer; }
     #gameOver { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #f00; font-family: monospace; font-size: 48px; display: none; text-shadow: 2px 2px 10px #000; text-align: center; z-index: 100; }
     #lives { position: absolute; top: 50px; left: 10px; color: #f00; font-family: monospace; font-size: 18px; text-shadow: 2px 2px 6px #000; }
     canvas.grayscale { filter: grayscale(100%); transition: filter 2s; }
     #damageFlash { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 0, 0, 0); pointer-events: none; z-index: 50; transition: background 0.1s; }
     #damageFlash.active { background: rgba(255, 0, 0, 0.4); }
     #dangerVignette { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 40; opacity: 0; transition: opacity 0.3s; box-shadow: inset 0 0 150px rgba(255, 0, 0, 0.8); }
+    #touchControls { position: fixed; bottom: 20px; left: 20px; z-index: 300; display: none; }
+    .touch-btn, #touchControls {
+      background: rgba(255,255,255,0.3);
+      border: 2px solid rgba(255,255,255,0.5);
+      color: white;
+      font-family: monospace;
+      font-size: 18px;
+      font-weight: bold;
+      text-align: center;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+      outline: none;
+    }
+    #wasdGrid { display: grid; grid-template-columns: 50px 50px 50px; grid-template-rows: 50px 50px; gap: 5px; margin-bottom: 10px; }
+    #wasdGrid .btn-w { grid-column: 2; grid-row: 1; }
+    #wasdGrid .btn-a { grid-column: 1; grid-row: 2; }
+    #wasdGrid .btn-s { grid-column: 2; grid-row: 2; }
+    #wasdGrid .btn-d { grid-column: 3; grid-row: 2; }
+    #wasdGrid .btn-e { grid-column: 3; grid-row: 1; }
+    #fireBtn { position: fixed; bottom: 20px; right: 20px; width: 80px; height: 50px; background: rgba(255,100,100,0.4); border: 2px solid rgba(255,100,100,0.7); z-index: 300; color: white; font-family: monospace; font-size: 18px; font-weight: bold; text-align: center; user-select: none; touch-action: none; display: none; }
+    #shiftBtn { position: fixed; bottom: 80px; right: 20px; width: 80px; height: 50px; background: rgba(255,255,100,0.4); border: 2px solid rgba(255,255,100,0.7); z-index: 300; color: white; font-family: monospace; font-size: 18px; font-weight: bold; text-align: center; user-select: none; touch-action: none; display: none; }
+    #escBtn { position: absolute; top: 155px; right: 10px; width: 60px; height: 30px; background: rgba(255,255,255,0.3); border: 2px solid rgba(255,255,255,0.5); color: white; font-family: monospace; font-size: 14px; font-weight: bold; text-align: center; user-select: none; touch-action: none; z-index: 300; display: none; }
   </style>
 </head>
 <body>
@@ -64,18 +90,70 @@
 <div id="lives" style="display:none;">Lives: ❤❤❤</div>
 <div id="timer">0:00.0</div>
 <div id="leaderboard"><div style="text-align: center; margin-bottom: 5px;">TOP TIMES</div></div>
+<div class="touch-btn" id="escBtn">ESC</div>
 <div id="sprintBar"><div id="sprintFill"></div></div>
 <div id="laserBar"><div id="laserFill"></div></div>
 <div id="debug"></div>
 <div id="win">YOU WIN!<br><span style="font-size: 20px; color: #aaa;">Press R to reset</span></div>
 <div id="gameOver">GAME OVER<br><span style="font-size: 20px; color: #aaa;">Press R to reset</span></div>
-<div id="resetPrompt">Reset maze?<br><span style="font-size: 14px; color: #aaa;">R to reset | Click to resume</span></div>
+<div id="resetPrompt">Click to Start<br><span style="font-size: 14px; color: #aaa;"></span></div>
+
+<div id="touchControls">
+  <div id="wasdGrid">
+    <div class="touch-btn btn-w" data-key="KeyW">W</div>
+    <div class="touch-btn btn-e" data-key="KeyE">E</div>
+    <div class="touch-btn btn-a" data-key="KeyA">A</div>
+    <div class="touch-btn btn-s" data-key="KeyS">S</div>
+    <div class="touch-btn btn-d" data-key="KeyD">D</div>
+  </div>
+</div>
+<div class="touch-btn" id="shiftBtn" data-key="ShiftLeft">SHIFT</div>
+<div class="touch-btn" id="fireBtn">FIRE</div>
 
 <script>
 (() => {
   const canvas = document.getElementById("canvas");
   const gl = canvas.getContext("webgl", { antialias: true });
   if (!gl) { document.body.innerHTML = "<pre>WebGL not available.</pre>"; return; }
+
+  // Adaptive touch detection
+  const touchState = { touchUI: false, decided: false };
+  const hasPointerLock = "pointerLockElement" in document;
+  let playing = false;
+  
+  function initialTouchGuess() {
+    const coarse = matchMedia('(pointer: coarse)').matches;
+    const canTouch = navigator.maxTouchPoints > 0;
+    touchState.touchUI = canTouch && coarse;
+    updateTouchControls();
+  }
+  
+  function updateTouchControls() {
+    const controls = document.getElementById('touchControls');
+    const fireBtn = document.getElementById('fireBtn');
+    const shiftBtn = document.getElementById('shiftBtn');
+    const escBtn = document.getElementById('escBtn');
+    const display = touchState.touchUI ? 'block' : 'none';
+    controls.style.display = display;
+    fireBtn.style.display = display;
+    shiftBtn.style.display = display;
+    escBtn.style.display = display;
+  }
+  
+  initialTouchGuess();
+  
+  window.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch') { touchState.touchUI = true; touchState.decided = true; updateTouchControls(); }
+    if (e.pointerType === 'mouse') { touchState.touchUI = false; touchState.decided = true; updateTouchControls(); }
+  }, { passive: true });
+  
+  window.addEventListener('touchstart', () => {
+    touchState.touchUI = true; touchState.decided = true; updateTouchControls();
+  }, { passive: true });
+  
+  function isActivePlay() {
+    return (hasPointerLock && document.pointerLockElement === canvas) || (touchState.touchUI && playing);
+  }
 
   // ---------- Resize ----------
   function resize() {
@@ -264,7 +342,7 @@
   let bossHits = 0;
   const lasers = [];
   const particles = [];
-  let resetPromptActive = false;
+  let resetPromptActive = true;
   let gameWon = false;
   let gameOver = false;
   let lives = 3;
@@ -738,6 +816,9 @@
 
   initGame();
   updateLeaderboard();
+  
+  // Show initial prompt
+  resetPromptEl.style.display = "block";
 
   // ---------- Input ----------
   let pendingShoot = false;
@@ -808,6 +889,11 @@
       }
       return;
     }
+    if (e.code === "Escape") {
+      resetPromptActive = true;
+      resetPromptEl.style.display = "block";
+      return;
+    }
     keys[e.code]=true;
     if (e.code === "Space") spacePressed = true;
   }, { passive: false });
@@ -823,11 +909,12 @@
     if (resetPromptActive) {
       resetPromptActive = false;
       resetPromptEl.style.display = "none";
+      resetPromptEl.innerHTML = 'Reset maze?<br><span style="font-size: 14px; color: #aaa;">R to reset | Click to resume</span>';
       canvas.requestPointerLock();
       if (audioEnabled && musicTracks[currentLevel]) {
         audio.play().catch(e => console.log('Audio resume failed:', e));
       }
-    } else if (document.pointerLockElement === canvas) {
+    } else if (document.pointerLockElement === canvas || (isTouchDevice && playing)) {
       shoot(false); // Normal shot
       isHolding = true;
       holdStartTime = performance.now();
@@ -867,6 +954,138 @@
     camera.yaw -= e.movementX * 0.0022;
     camera.pitch -= e.movementY * 0.0022;
     camera.pitch = Math.max(-1.2, Math.min(1.2, camera.pitch));
+  });
+  
+  // Touch/pointer drag camera control for mobile
+  let touchLooking = false;
+  let lastTouchX = 0;
+  let lastTouchY = 0;
+
+  canvas.addEventListener("pointerdown", e => {
+    if (e.pointerType === "touch") {
+      touchLooking = true;
+      lastTouchX = e.clientX;
+      lastTouchY = e.clientY;
+      // Enter playing mode on mobile
+      playing = true;
+      if (resetPromptActive) {
+        resetPromptActive = false;
+        resetPromptEl.style.display = "none";
+        resetPromptEl.innerHTML = 'Reset maze?<br><span style="font-size: 14px; color: #aaa;">R to reset | Click to resume</span>';
+        enableAudio();
+      }
+    }
+  });
+
+  canvas.addEventListener("pointermove", e => {
+    if (!touchLooking) return;
+    if (e.pointerType !== "touch") return;
+
+    const dx = e.clientX - lastTouchX;
+    const dy = e.clientY - lastTouchY;
+    lastTouchX = e.clientX;
+    lastTouchY = e.clientY;
+
+    camera.yaw -= dx * 0.004;
+    camera.pitch -= dy * 0.004;
+    camera.pitch = Math.max(-1.2, Math.min(1.2, camera.pitch));
+  }, { passive: false });
+
+  canvas.addEventListener("pointerup", () => {
+    touchLooking = false;
+  });
+  canvas.addEventListener("pointercancel", () => {
+    touchLooking = false;
+  });
+  
+  // Touch controls
+  function killSelectAndFocus(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const sel = window.getSelection?.();
+    if (sel && sel.removeAllRanges) sel.removeAllRanges();
+    
+    if (document.activeElement && document.activeElement.blur) {
+      document.activeElement.blur();
+    }
+  }
+  
+  document.querySelectorAll('.touch-btn').forEach(btn => {
+    btn.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'touch') return;
+      killSelectAndFocus(e);
+      
+      if (btn.id === 'fireBtn') {
+        if (isActivePlay()) shoot(false);
+        return;
+      }
+      if (btn.id === 'escBtn') {
+        playing = false;
+        resetPromptActive = true;
+        resetPromptEl.innerHTML = 'Reset maze?<br><span style="font-size: 14px; color: #aaa;">Tap here to reset | Tap outside to resume</span>';
+        resetPromptEl.style.display = 'block';
+        return;
+      }
+      
+      const key = btn.dataset.key;
+      if (key) keys[key] = true;
+    }, { passive: false });
+    
+    btn.addEventListener('pointerup', e => {
+      if (e.pointerType !== 'touch') return;
+      killSelectAndFocus(e);
+      
+      const key = btn.dataset.key;
+      if (key) keys[key] = false;
+    }, { passive: false });
+    
+    btn.addEventListener('pointercancel', e => {
+      killSelectAndFocus(e);
+      const key = btn.dataset.key;
+      if (key) keys[key] = false;
+    }, { passive: false });
+  });
+  
+  // Make resetPrompt clickable
+  resetPromptEl.addEventListener('click', e => {
+    e.stopPropagation();
+    if (resetPromptActive) {
+      if (resetPromptEl.innerHTML.includes('Reset maze?')) {
+        // Reset the maze
+        initGame(1);
+        resetPromptActive = false;
+        resetPromptEl.style.display = 'none';
+        if (hasPointerLock) canvas.requestPointerLock();
+        else playing = true;
+      } else {
+        // Resume game
+        resetPromptActive = false;
+        resetPromptEl.style.display = 'none';
+        resetPromptEl.innerHTML = 'Reset maze?<br><span style="font-size: 14px; color: #aaa;">R to reset | Click to resume</span>';
+        if (hasPointerLock) canvas.requestPointerLock();
+        else playing = true;
+        enableAudio();
+        if (audioEnabled && musicTracks[currentLevel]) {
+          audio.play().catch(e => console.log('Audio resume failed:', e));
+        }
+      }
+    }
+  });
+  
+  // Click outside resetPrompt to resume
+  document.addEventListener('click', e => {
+    if (resetPromptActive && resetPromptEl.innerHTML.includes('Reset maze?') && !resetPromptEl.contains(e.target)) {
+      resetPromptActive = false;
+      resetPromptEl.style.display = 'none';
+      resetPromptEl.innerHTML = 'Click to Start<br><span style="font-size: 14px; color: #aaa;">R to reset | Click to resume</span>';
+      if (hasPointerLock) canvas.requestPointerLock();
+      else playing = true;
+      enableAudio();
+      if (audioEnabled && musicTracks[currentLevel]) {
+        audio.play().catch(e => console.log('Audio resume failed:', e));
+      }
+    }
   });
 
   function shoot(shotgun = false) {
@@ -1425,8 +1644,8 @@
       return;
     }
     
-    // Pause when not in pointer lock (escape pressed)
-    if (document.pointerLockElement !== canvas) return;
+    // Pause when not in active play mode
+    if (!isActivePlay()) return;
     
     if (!gameWon) {
       elapsedTime = (performance.now() - startTime) / 1000;
