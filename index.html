@@ -46,6 +46,15 @@
     #win { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0f0; font-family: monospace; font-size: 48px; display: none; text-shadow: 2px 2px 10px #000; text-align: center; }
     #resetPrompt { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 30px; color: #fff; font-family: monospace; font-size: 20px; display: none; text-align: center; border: 2px solid #0f0; z-index: 200; pointer-events: auto; cursor: pointer; }
     #gameOver { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #f00; font-family: monospace; font-size: 48px; display: none; text-shadow: 2px 2px 10px #000; text-align: center; z-index: 100; }
+    /* the radar: a round, heading-up map of the corridors you've seen (bottom-left; top-left beside the touch pad) */
+    #radar { position: absolute; left: 12px; bottom: 16px; width: 170px; height: 170px; border-radius: 50%;
+      background: rgba(4, 8, 18, 0.72); border: 2px solid rgba(0, 255, 120, 0.55); box-shadow: 0 0 12px rgba(0, 255, 120, 0.25);
+      pointer-events: none; z-index: 30; }
+    #radar.touch { bottom: auto; top: 96px; width: 140px; height: 140px; }
+    #banner { position: absolute; top: 24%; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: none;
+      font-family: monospace; color: #5fffb0; font-size: 34px; text-shadow: 0 0 12px rgba(0, 255, 160, 0.8), 2px 2px 6px #000;
+      display: none; z-index: 60; }
+    #banner small { display: block; font-size: 18px; color: #d8fff0; margin-top: 6px; }
     #lives { position: absolute; top: 50px; left: 10px; color: #f00; font-family: monospace; font-size: 18px; text-shadow: 2px 2px 6px #000; }
     canvas.grayscale { filter: grayscale(100%); transition: filter 2s; }
     #damageFlash { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 0, 0, 0); pointer-events: none; z-index: 50; transition: background 0.1s; }
@@ -88,6 +97,8 @@
   <div>Balloons: <span id="balloons">0</span> | Cubes: <span id="cubes">0</span></div>
 </div>
 <div id="lives" style="display:none;">Lives: ❤❤❤</div>
+<canvas id="radar"></canvas>
+<div id="banner"></div>
 <div id="timer">0:00.0</div>
 <div id="leaderboard"><div style="text-align: center; margin-bottom: 5px;">TOP TIMES</div></div>
 <div class="touch-btn" id="escBtn">ESC</div>
@@ -138,6 +149,7 @@
     fireBtn.style.display = display;
     shiftBtn.style.display = display;
     escBtn.style.display = display;
+    document.getElementById('radar').classList.toggle('touch', touchState.touchUI);
   }
   
   initialTouchGuess();
@@ -295,7 +307,7 @@
   }
 
   // ---------- Maze ----------
-  function generateMaze(size) {
+  function generateMaze(size, loops = 0.3) {
     // size should be odd
     const maze = Array(size).fill(0).map(() => Array(size).fill(1));
     const stack = [{x:1, y:1}];
@@ -321,7 +333,27 @@
 
     // Ensure exit is open-ish
     maze[size-2][size-2]=0;
+    braidMaze(maze, size, loops);
     return maze;
+  }
+
+  // Knock through the end wall of some dead ends (a share 'chance' of them), so the maze gets loops: shortcuts, and a
+  // way round instead of backtracking all the way out of every dead end. The outer wall always stays.
+  function braidMaze(maze, size, chance) {
+    const dirs = [[0,1],[1,0],[0,-1],[-1,0]];
+    for (let y = 1; y < size - 1; y += 2) {
+      for (let x = 1; x < size - 1; x += 2) {
+        if (maze[y][x] !== 0) continue;
+        let open = 0;
+        for (const [dx,dy] of dirs) if (maze[y+dy][x+dx] === 0) open++;
+        if (open !== 1 || Math.random() >= chance) continue;
+        const shut = dirs.filter(([dx,dy]) => maze[y+dy][x+dx] === 1 &&
+          x+2*dx > 0 && x+2*dx < size-1 && y+2*dy > 0 && y+2*dy < size-1);
+        if (!shut.length) continue;
+        const [dx,dy] = shut[(Math.random()*shut.length)|0];
+        maze[y+dy][x+dx] = 0;
+      }
+    }
   }
 
   let MAZE_SIZE = 15;
@@ -359,6 +391,11 @@
   let infiniteLives = false;
   let medkits = 0;
   let shields = 0;
+  // the exit portal opens at the start once every balloon and cube is gone; the level ends when you reach it
+  const PORTAL = { x: 1.5, z: 1.5 };
+  let exitOpen = false;
+  // cells you've seen, for the radar (walls next to a seen corridor count as seen too)
+  let seen = new Uint8Array(15 * 15);
 
   // Audio system
   const audio = new Audio();
@@ -444,6 +481,16 @@
   const gameOverEl = document.getElementById("gameOver");
   const damageFlashEl = document.getElementById("damageFlash");
   const dangerVignetteEl = document.getElementById("dangerVignette");
+  const bannerEl = document.getElementById("banner");
+  const radarEl = document.getElementById("radar");
+  const radarCtx = radarEl.getContext("2d");
+  let bannerTimer = 0;
+  function showBanner(title, line, secs) {
+    bannerEl.innerHTML = title + (line ? "<small>" + line + "</small>" : "");
+    bannerEl.style.display = "block";
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(() => { bannerEl.style.display = "none"; }, secs * 1000);
+  }
   debugEl.style.display = "none";
   
   function updateCounts() {
@@ -486,7 +533,7 @@
   function initGame(level = 1) {
     currentLevel = level;
     MAZE_SIZE = level === 1 ? 11 : (level === 4 || level === 5) ? 31 : 15;
-    maze = generateMaze(MAZE_SIZE);
+    maze = generateMaze(MAZE_SIZE, level === 1 ? 0.25 : 0.35);
     ladders.length = 0;
     camera.x = 1.5; camera.y = 0.65; camera.z = 1.5; camera.pitch = 0;
     onWallTop = false;
@@ -527,6 +574,9 @@
     particles.length = 0;
     gameWon = false;
     gameOver = false;
+    exitOpen = false;
+    seen = new Uint8Array(MAZE_SIZE * MAZE_SIZE);
+    bannerEl.style.display = "none";
     lives = 3;
     laserAmmo = 3;
     shields = 0;
@@ -1157,6 +1207,7 @@
     varying vec3 v_worldNrm;
 
     uniform vec3 u_color;
+    uniform float u_emissive;   // 0: lit as usual; 1: glows its own colour from every side (the portal)
     uniform vec3 u_camPos;
 
     uniform vec3 u_lightDir;
@@ -1278,6 +1329,7 @@
       float stars = step(0.985, hash(floor(skyPos)));
       float nebula = hash(floor(skyPos * 0.2)) * 0.08;
       vec3 fogColor = vec3(0.02, 0.01, 0.05) + vec3(0.05, 0.03, 0.15) * nebula + stars * vec3(1.2, 1.1, 1.4);
+      col = mix(col, u_color, u_emissive);
       col = mix(col, fogColor, fog);
 
       // Contrast boost
@@ -1296,6 +1348,7 @@
   const locModel = gl.getUniformLocation(program, "u_model");
   const locNMat  = gl.getUniformLocation(program, "u_nrmMat");
   const locColor = gl.getUniformLocation(program, "u_color");
+  const locEmissive = gl.getUniformLocation(program, "u_emissive");
   const locCam   = gl.getUniformLocation(program, "u_camPos");
   const locLD    = gl.getUniformLocation(program, "u_lightDir");
   const locLC    = gl.getUniformLocation(program, "u_lightColor");
@@ -1495,6 +1548,99 @@
     return false;
   }
 
+  function markSeen() {
+    const cx = Math.floor(camera.x), cz = Math.floor(camera.z), N = MAZE_SIZE;
+    const mark = (x, z) => { if (x >= 0 && z >= 0 && x < N && z < N) seen[z * N + x] = 1; };
+    const markOpen = (x, z) => { mark(x, z); mark(x + 1, z); mark(x - 1, z); mark(x, z + 1); mark(x, z - 1); };
+    const r = onWallTop ? 3 : 1;
+    for (let z = cz - r; z <= cz + r; z++) for (let x = cx - r; x <= cx + r; x++) mark(x, z);
+    if (onWallTop) return;
+    // straight down each corridor from where you stand, until a wall
+    for (const [dx, dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      for (let x = cx, z = cz, i = 0; i < N && x >= 0 && z >= 0 && x < N && z < N; i++, x += dx, z += dz) {
+        if (maze[z][x] !== 0) { mark(x, z); break; }
+        markOpen(x, z);
+      }
+    }
+  }
+  function itemsLeft() { return balloons.filter(b => b.active).length + cubes.filter(c => c.active).length; }
+  function openExit() {
+    exitOpen = true;
+    showBanner("ALL FOUND!", "The portal at the start is open. Run!", 3.5);
+    playSound("shields_up");
+    screenShake = Math.max(screenShake, 0.4);
+  }
+  function atPortal() { return !onWallTop && Math.hypot(camera.x - PORTAL.x, camera.z - PORTAL.z) < 0.6; }
+
+  // ---------- Radar ----------
+  // Heading-up: straight ahead is always up. It shows the corridors you've seen, the balloons and cubes you've spotted,
+  // and once only three are left, all of them, with a pip on the rim pointing at any that are out of range. When the
+  // portal is open it shows that too.
+  function drawRadar(t) {
+    const dpr = window.devicePixelRatio || 1;
+    const size = radarEl.clientWidth, W = Math.round(size * dpr);
+    if (!size) return;
+    if (radarEl.width !== W) { radarEl.width = W; radarEl.height = W; }
+    const g = radarCtx, R = W / 2, cells = 6.5, k = R / cells;
+    const cy = Math.cos(camera.yaw), sy = Math.sin(camera.yaw);
+    // world (x, z) to radar pixels: ahead is up, the player's right is right
+    const a = -k * cy, b = -k * sy, c = k * sy, d = -k * cy;
+    const e = R - (a * camera.x + c * camera.z), f = R - (b * camera.x + d * camera.z);
+    const toScreen = (x, z) => [a * x + c * z + e, b * x + d * z + f];
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, W, W);
+    g.save();
+    g.beginPath(); g.arc(R, R, R - 1, 0, Math.PI * 2); g.clip();
+    g.setTransform(a, b, c, d, e, f);
+    const N = MAZE_SIZE, x0 = Math.max(0, Math.floor(camera.x - cells - 1)), x1 = Math.min(N - 1, Math.ceil(camera.x + cells + 1));
+    const z0 = Math.max(0, Math.floor(camera.z - cells - 1)), z1 = Math.min(N - 1, Math.ceil(camera.z + cells + 1));
+    for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+      if (!seen[z * N + x]) continue;
+      g.fillStyle = maze[z][x] === 0 ? "rgba(80, 175, 160, 0.9)" : "rgba(38, 52, 68, 0.95)";
+      g.fillRect(x - 0.02, z - 0.02, 1.04, 1.04);
+    }
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const left = itemsLeft(), reveal = left > 0 && left <= 3, pulse = 0.6 + 0.4 * Math.sin(t * 6);
+    const spotted = (o) => seen[Math.floor(o.z) * N + Math.floor(o.x)];
+    function dot(o, col, square) {
+      let [px, py] = toScreen(o.x, o.z);
+      const dx = px - R, dy = py - R, dist = Math.hypot(dx, dy), rim = R - 7 * dpr;
+      if (dist > rim) {
+        if (!reveal && !o.portal) return;
+        // out of range: a pip on the rim, pointing the way
+        px = R + dx / dist * rim; py = R + dy / dist * rim;
+        g.save(); g.translate(px, py); g.rotate(Math.atan2(dy, dx));
+        g.fillStyle = col; g.beginPath(); g.moveTo(5 * dpr, 0); g.lineTo(-4 * dpr, -4 * dpr); g.lineTo(-4 * dpr, 4 * dpr); g.fill();
+        g.restore();
+        return;
+      }
+      const s = (reveal ? 3.2 + 1.2 * pulse : 3) * dpr;
+      g.fillStyle = col;
+      if (square) g.fillRect(px - s, py - s, s * 2, s * 2);
+      else { g.beginPath(); g.arc(px, py, s, 0, Math.PI * 2); g.fill(); }
+      if (o.onWall) { g.strokeStyle = "rgba(255,255,255,0.85)"; g.lineWidth = 1.2 * dpr; g.beginPath(); g.arc(px, py, s + 2.5 * dpr, 0, Math.PI * 2); g.stroke(); }
+    }
+    for (const bl of balloons) if (bl.active && (reveal || spotted(bl))) dot(bl, bl.blue ? "#4a8cff" : "#ff4a4a", false);
+    for (const cu of cubes) if (cu.active && (reveal || spotted(cu))) dot(cu, cu.powerup === 'medkit' ? "#ff6a6a" : cu.powerup === 'shields' ? "#4aff6a" : "#5ab4ff", true);
+    if (exitOpen) {
+      const [px, py] = toScreen(PORTAL.x, PORTAL.z);
+      if (Math.hypot(px - R, py - R) <= R - 7 * dpr) {
+        g.strokeStyle = "#5fffe0"; g.lineWidth = 2.5 * dpr;
+        g.beginPath(); g.arc(px, py, (5 + 2 * pulse) * dpr, 0, Math.PI * 2); g.stroke();
+      } else dot({ x: PORTAL.x, z: PORTAL.z, portal: true }, "#5fffe0", false);
+    }
+    // you: an arrow pointing ahead
+    g.fillStyle = "#ffffff";
+    g.beginPath(); g.moveTo(R, R - 7 * dpr); g.lineTo(R - 5 * dpr, R + 5 * dpr); g.lineTo(R, R + 2.5 * dpr); g.lineTo(R + 5 * dpr, R + 5 * dpr); g.fill();
+    const label = exitOpen ? "PORTAL OPEN" : reveal ? (left === 1 ? "LAST ONE!" : "LAST " + left) : "";
+    if (label) {
+      g.font = "bold " + Math.round(11 * dpr) + "px monospace"; g.textAlign = "center";
+      g.fillStyle = exitOpen ? "#5fffe0" : "#ffe66a";
+      g.fillText(label, R, W - 16 * dpr);
+    }
+    g.restore();
+  }
+
   function updateDebug() {
     const mx = Math.floor(camera.x), mz = Math.floor(camera.z);
     let grid = '';
@@ -1649,6 +1795,7 @@
     
     // Pause when not in active play mode
     if (!isActivePlay()) return;
+    markSeen();
     
     if (!gameWon) {
       elapsedTime = (performance.now() - startTime) / 1000;
@@ -2277,9 +2424,12 @@
 
 
 
-    if (balloons.every(b=>!b.active) && cubes.every(c=>!c.active)) {
+    // clearing the maze opens the portal back at the start; the level ends when you reach it
+    if (!exitOpen && !gameWon && balloons.every(b=>!b.active) && cubes.every(c=>!c.active)) openExit();
+    if (exitOpen && atPortal()) {
       if (!gameWon) {
         gameWon = true;
+        bannerEl.style.display = "none";
         addTime(elapsedTime);
         if (currentLevel === 1) {
           document.getElementById("win").innerHTML = 'LEVEL 1 COMPLETE!<br><span style="font-size: 20px; color: #aaa;">Loading Level 2...</span>';
@@ -2317,12 +2467,13 @@
     }
   }
 
-  function drawModel(proj, view, model, color, useSphere = false, useDiamond = false) {
+  function drawModel(proj, view, model, color, useSphere = false, useDiamond = false, emissive = 0) {
     const mvp = mat4Mul(proj, mat4Mul(view, model));
     gl.uniformMatrix4fv(locMVP, false, mvp);
     gl.uniformMatrix4fv(locModel, false, model);
     gl.uniformMatrix3fv(locNMat, false, normalMatrixFromModel(model));
     gl.uniform3f(locColor, color[0], color[1], color[2]);
+    gl.uniform1f(locEmissive, emissive);
     
     if (useSphere) {
       gl.bindBuffer(gl.ARRAY_BUFFER, bufSpherePos);
@@ -2454,8 +2605,14 @@
       cubePositions[i*3+1] = activeCubes[i].y;
       cubePositions[i*3+2] = activeCubes[i].z;
     }
+    // the open portal glows on the walls round it like a cube does
+    let glowCount = cubeCount;
+    if (exitOpen && glowCount < 8) {
+      cubePositions[glowCount*3] = PORTAL.x; cubePositions[glowCount*3+1] = 0.8; cubePositions[glowCount*3+2] = PORTAL.z;
+      glowCount++;
+    }
     gl.uniform3fv(locCubePos, cubePositions);
-    gl.uniform1i(locCubeCount, cubeCount);
+    gl.uniform1i(locCubeCount, glowCount);
 
     // floor (thin)
     // (draw as scaled cube per cell, cheap and looks OK)
@@ -2536,6 +2693,18 @@
         color = [0.1, 1.0, 0.1]; // Green for shields
       }
       drawModel(proj, view, model, color);
+    }
+
+    // the exit portal: a pillar of light ringed by spinning shards
+    if (exitOpen) {
+      const pulse = 1 + 0.2 * Math.sin(t * 5);
+      drawModel(proj, view, mat4Mul(mat4Translate(PORTAL.x, 0.8, PORTAL.z), mat4Mul(mat4RotateY(t * 0.8), mat4Scale(0.14 * pulse, 1.6, 0.14 * pulse))), [0.45 * pulse, 1.0, 0.95], false, false, 0.9);
+      drawModel(proj, view, mat4Mul(mat4Translate(PORTAL.x, 0.05, PORTAL.z), mat4Mul(mat4RotateY(-t), mat4Scale(0.7, 0.02, 0.7))), [0.2, 0.75 * pulse, 0.7 * pulse], false, false, 0.8);
+      for (let i = 0; i < 10; i++) {
+        const ang = t * 1.7 + i * Math.PI * 2 / 10, y = 0.7 + Math.sin(t * 2.2 + i) * 0.3;
+        const m = mat4Mul(mat4Translate(PORTAL.x + Math.cos(ang) * 0.38, y, PORTAL.z + Math.sin(ang) * 0.38), mat4Mul(mat4RotateY(-ang), mat4Scale(0.07, 0.07, 0.07)));
+        drawModel(proj, view, m, [0.55, 1.0, 0.95], false, true, 0.75);
+      }
     }
 
     // ladders (Level 2, 3, 5)
@@ -2661,6 +2830,7 @@
       drawModel(proj, view, model, color);
     }
 
+    drawRadar(t);
     requestAnimationFrame(frame);
   }
 
