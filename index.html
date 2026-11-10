@@ -914,7 +914,10 @@
       if (audioEnabled && musicTracks[currentLevel]) {
         audio.play().catch(e => console.log('Audio resume failed:', e));
       }
-    } else if (document.pointerLockElement === canvas || (isTouchDevice && playing)) {
+    } else if (e.pointerType === "touch") {
+      // Touch screens: dragging the view looks around (the touch handler below) and the FIRE button shoots.
+      // (This used to test an undefined isTouchDevice, which threw on every touch of the view.)
+    } else if (document.pointerLockElement === canvas) {
       shoot(false); // Normal shot
       isHolding = true;
       holdStartTime = performance.now();
