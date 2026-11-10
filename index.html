@@ -391,6 +391,17 @@
   let infiniteLives = false;
   let medkits = 0;
   let shields = 0;
+  // each level's look: wall style, colours, and the glowing strip along the foot of the walls
+  const THEMES = [null,
+    { name: "Mossy Ruins",   style: 0, a: [0.50, 0.48, 0.44], b: [0.22, 0.38, 0.16], floor: [0.24, 0.23, 0.21], trim: [0.45, 1.00, 0.55], trimK: 0.55 },
+    { name: "Sandstone Walls", style: 1, a: [0.78, 0.62, 0.42], b: [0.56, 0.40, 0.25], floor: [0.40, 0.32, 0.22], trim: [1.00, 0.70, 0.30], trimK: 0.6 },
+    { name: "Neon Circuit",  style: 2, a: [0.20, 0.25, 0.36], b: [0.12, 0.14, 0.20], floor: [0.10, 0.11, 0.16], trim: [0.20, 0.90, 1.00], trimK: 1.0 },
+    { name: "Ember Depths",  style: 3, a: [0.20, 0.15, 0.14], b: [1.00, 0.34, 0.08], floor: [0.12, 0.10, 0.09], trim: [1.00, 0.32, 0.10], trimK: 0.9 },
+    { name: "Crystal Spire", style: 4, a: [0.52, 0.58, 0.84], b: [0.78, 0.58, 1.00], floor: [0.22, 0.24, 0.36], trim: [0.78, 0.58, 1.00], trimK: 0.85 },
+  ];
+  // the walls and floors of the level, one buffer each, built when a level starts
+  let levelMesh = null, meshDirty = true;
+
   // the exit portal opens at the start once every balloon and cube is gone; the level ends when you reach it
   const PORTAL = { x: 1.5, z: 1.5 };
   let exitOpen = false;
@@ -576,7 +587,8 @@
     gameOver = false;
     exitOpen = false;
     seen = new Uint8Array(MAZE_SIZE * MAZE_SIZE);
-    bannerEl.style.display = "none";
+    meshDirty = true;
+    showBanner("LEVEL " + level, THEMES[level] ? THEMES[level].name : "", 2.6);
     lives = 3;
     laserAmmo = 3;
     shields = 0;
@@ -1201,13 +1213,27 @@
   `);
 
   const fs = compile(gl.FRAGMENT_SHADER, `
+    #ifdef GL_FRAGMENT_PRECISION_HIGH
+    precision highp float;
+    #else
     precision mediump float;
+    #endif
 
     varying vec3 v_worldPos;
     varying vec3 v_worldNrm;
 
     uniform vec3 u_color;
     uniform float u_emissive;   // 0: lit as usual; 1: glows its own colour from every side (the portal)
+    uniform float u_bloom;      // how strongly this object glows into the bloom pass (0: not at all)
+    uniform float u_glowPass;   // 1 while drawing the small glow image that gets blurred into bloom
+    uniform float u_mat;        // 0: objects (plain colour), 1: walls, 2: floors
+    uniform float u_style;      // the level's look: 0 mossy stone, 1 sandstone, 2 neon panels, 3 ember rock, 4 crystal
+    uniform vec3 u_themeA;      // main wall colour
+    uniform vec3 u_themeB;      // second colour: moss, darker sandstone, panel trim, lava, crystal tint
+    uniform vec3 u_floorCol;
+    uniform vec3 u_trim;        // the glowing strip along the foot of the walls
+    uniform float u_trimK;
+    uniform float u_time;
     uniform vec3 u_camPos;
 
     uniform vec3 u_lightDir;
@@ -1227,11 +1253,132 @@
     float hash(vec3 p) {
       return fract(sin(dot(p, vec3(127.1, 311.7, 269.5))) * 43758.5453);
     }
+    float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float n2(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h2(i), h2(i + vec2(1.0, 0.0)), f.x), mix(h2(i + vec2(0.0, 1.0)), h2(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
+    float fbm(vec2 p) { return 0.5 * n2(p) + 0.3 * n2(p * 2.1 + 7.3) + 0.2 * n2(p * 4.3 + 3.1); }
+
+    // Blocks laid in rows (each row shifted by 'shift' of a block): xy = which block, z = distance to its edge
+    vec3 blocks(vec2 uv, vec2 size, float shift) {
+      vec2 q = uv / size;
+      q.x += mod(floor(q.y), 2.0) * shift;
+      vec2 f = fract(q), e = min(f, 1.0 - f) * size;
+      return vec3(floor(q), min(e.x, e.y));
+    }
+    // a bevelled block's height: low in the gaps, rising to flat across a bevel
+    float blockHeight(vec2 uv, vec2 size, float shift, float gap, float bevel) {
+      return smoothstep(gap, gap + bevel, blocks(uv, size, shift).z);
+    }
+
+    // Walls and floors: pattern, a little bump, colour and anything that glows, all from the world position
+    void surface(vec3 P, inout vec3 N, out vec3 albedo, out vec3 emis, out float specK) {
+      emis = vec3(0.0);
+      specK = 0.25;
+      bool floorTile = u_mat > 1.5;
+      bool top = N.y > 0.5;
+      // texture coordinates on this face, and the two directions along it (for the bump)
+      vec2 uv; vec3 T; vec3 B;
+      if (floorTile || top) { uv = P.xz; T = vec3(1.0, 0.0, 0.0); B = vec3(0.0, 0.0, 1.0); }
+      else if (abs(N.x) > 0.5) { uv = vec2(P.z, P.y); T = vec3(0.0, 0.0, 1.0); B = vec3(0.0, 1.0, 0.0); }
+      else { uv = vec2(P.x, P.y); T = vec3(1.0, 0.0, 0.0); B = vec3(0.0, 1.0, 0.0); }
+
+      vec2 size = vec2(0.42, 0.21); float shift = 0.5, gap = 0.018, bevel = 0.035;
+      if (floorTile) { size = vec2(0.5, 0.5); shift = 0.0; gap = 0.012; bevel = 0.02; }
+      else if (u_style > 3.5) { size = vec2(0.31, 0.31); shift = 0.5; gap = 0.006; bevel = 0.05; }
+      else if (u_style > 2.5) { size = vec2(0.55, 0.40); shift = 0.37; gap = 0.02; bevel = 0.05; }
+      else if (u_style > 1.5) { size = vec2(0.5, 0.65); shift = 0.0; gap = 0.012; bevel = 0.02; }
+      else if (u_style > 0.5) { size = vec2(0.66, 0.33); shift = 0.5; gap = 0.012; bevel = 0.06; }
+
+      vec3 bl = blocks(uv, size, shift);
+      vec2 id = bl.xy;
+      float inGap = 1.0 - smoothstep(gap * 0.6, gap, bl.z);
+      float r = h2(id), grain = fbm(uv * 6.0);
+
+      // bump: tilt the normal down the bevel (crystal facets tilt each block instead)
+      float e = 0.006;
+      float h0 = blockHeight(uv, size, shift, gap, bevel);
+      float hx = blockHeight(uv + vec2(e, 0.0), size, shift, gap, bevel);
+      float hy = blockHeight(uv + vec2(0.0, e), size, shift, gap, bevel);
+      vec3 bumped = N - (T * (hx - h0) + B * (hy - h0)) / e * (u_style < 0.5 ? 0.006 : 0.01);
+      if (!floorTile && u_style > 3.5) bumped += (T * (r - 0.5) + B * (h2(id + 3.1) - 0.5)) * 0.7;
+      N = normalize(bumped);
+
+      if (floorTile) {
+        albedo = u_floorCol * (0.82 + 0.3 * r) * (0.85 + 0.3 * grain);
+        albedo *= mix(1.0, 0.45, inGap);
+        specK = u_style > 3.5 ? 0.7 : u_style > 1.5 ? 0.5 : 0.2;
+        if (u_style < 0.5) albedo = mix(albedo, u_themeB * 0.8, smoothstep(0.62, 0.8, fbm(uv * 1.7)) * 0.6);
+        if (u_style > 2.5 && u_style < 3.5) {
+          float crack = 1.0 - smoothstep(0.0, 0.025, abs(fbm(uv * 2.3) - 0.5));
+          emis += u_themeB * crack * (0.55 + 0.45 * sin(u_time * 2.0 + grain * 9.0));
+        }
+        return;
+      }
+
+      if (u_style < 0.5) {
+        // mossy stone bricks, moss creeping up from the floor
+        albedo = u_themeA * (0.6 + 0.6 * r) * (0.7 + 0.5 * grain) * vec3(1.0 + 0.12 * (h2(id + 5.0) - 0.5), 1.0, 1.0 - 0.12 * (h2(id + 5.0) - 0.5));
+        float moss = smoothstep(0.45, 0.68, fbm(uv * 2.4 + id * 0.13)) * (1.0 - smoothstep(0.1, 1.0, P.y));
+        albedo = mix(albedo, u_themeB * (0.8 + 0.4 * grain), moss * 0.9);
+        albedo = mix(albedo, u_themeA * 0.3, inGap);
+      } else if (u_style < 1.5) {
+        // sandstone blocks with fine layers
+        albedo = mix(u_themeA, u_themeB, r * 0.6) * (0.85 + 0.25 * n2(vec2(uv.x * 1.5, uv.y * 22.0))) * (0.9 + 0.15 * grain);
+        albedo = mix(albedo, u_themeB * 0.45, inGap);
+      } else if (u_style < 2.5) {
+        // dark metal panels, some with a light slot
+        albedo = u_themeA * (0.85 + 0.25 * r) * (0.9 + 0.12 * grain);
+        albedo = mix(albedo, u_themeB * 0.3, inGap);
+        specK = 0.8;
+        vec2 f = fract(vec2((uv.x / size.x), uv.y / size.y));
+        float slot = step(0.55, r) * (1.0 - smoothstep(0.012, 0.022, abs(f.y - 0.78))) * step(0.2, f.x) * step(f.x, 0.8);
+        emis += u_trim * slot * (0.65 + 0.35 * sin(u_time * 3.0 + r * 20.0));
+      } else if (u_style < 3.5) {
+        // dark ember rock: glowing cracks and seams
+        albedo = u_themeA * (0.6 + 0.6 * grain) * (0.85 + 0.3 * r);
+        float crack = 1.0 - smoothstep(0.0, 0.03, abs(fbm(uv * 2.6 + 1.7) - 0.5));
+        float hot = max(crack, inGap * 0.45) * (0.55 + 0.45 * sin(u_time * 2.0 + grain * 9.0 + r * 4.0));
+        albedo = mix(albedo, u_themeA * 0.2, inGap);
+        emis += u_themeB * hot * (1.0 - smoothstep(0.3, 1.3, P.y) * 0.5);
+      } else {
+        // crystal: tilted facets with bright edges and the odd sparkle
+        albedo = mix(u_themeA, u_themeB, h2(id + 1.7)) * (0.8 + 0.25 * grain);
+        specK = 0.9;
+        emis += u_themeB * inGap * 0.35;
+        float sp = step(0.994, h2(floor(uv * 38.0)));
+        emis += vec3(1.0) * sp * (0.5 + 0.5 * sin(u_time * 4.0 + h2(floor(uv * 38.0) + 2.0) * 30.0));
+      }
+      if (!top) {
+        // darker toward the floor (contact shadow), and the glowing strip along the foot of the wall
+        albedo *= mix(0.55, 1.0, smoothstep(0.0, 0.6, P.y));
+        float band = smoothstep(0.015, 0.03, P.y) * (1.0 - smoothstep(0.065, 0.08, P.y));
+        emis += u_trim * band * u_trimK * (0.85 + 0.15 * sin(u_time * 2.5));
+        if (u_style > 1.5 && u_style < 2.5 || u_style > 3.5) {
+          float topBand = smoothstep(1.245, 1.258, P.y) * (1.0 - smoothstep(1.272, 1.285, P.y));
+          emis += u_trim * topBand * u_trimK * 0.8;
+        }
+      }
+    }
 
     void main(){
       vec3 N = normalize(v_worldNrm);
       vec3 L = normalize(u_lightDir);
       vec3 P = v_worldPos;
+
+      vec3 albedo = u_color, emis = vec3(0.0);
+      float specK = 0.35;
+      if (u_mat > 0.5) surface(P, N, albedo, emis, specK);
+      else if (P.y < 1.0) albedo = mix(vec3(0.18, 0.20, 0.26), u_color, smoothstep(0.0, 1.0, P.y));
+
+      // the glow pass only wants what shines, faded by distance like the fog
+      if (u_glowPass > 0.5) {
+        float gFog = smoothstep(8.0, 22.0, length(u_camPos - P));
+        gl_FragColor = vec4((emis + u_color * u_bloom) * (1.0 - gFog), 1.0);
+        return;
+      }
 
       float diff = max(dot(N, L), 0.0);
 
@@ -1239,13 +1386,7 @@
       vec3 H = normalize(L + V);
       float spec = pow(max(dot(N, H), 0.0), 32.0) * diff;
 
-      // Gradient effect for walls: blend with floor color at bottom
-      vec3 finalColor = u_color;
-      if (P.y < 1.0) {
-        float gradient = smoothstep(0.0, 1.0, P.y);
-        vec3 floorColor = vec3(0.18, 0.20, 0.26);
-        finalColor = mix(floorColor, u_color, gradient);
-      }
+      vec3 finalColor = albedo;
 
       // Cool ambient + warm direct
       vec3 ambient = vec3(0.10, 0.12, 0.18) * finalColor;
@@ -1257,7 +1398,8 @@
       float dist = length(u_pointPos - P);
       float pDiff = max(dot(N, Lp), 0.0);
       float atten = 1.0 / (1.0 + 0.15*dist + 0.05*dist*dist);
-      vec3 pointLight = pDiff * u_pointColor * atten;
+      // on walls and floors the flashlight takes on the surface's colour, so the textures and themes show
+      vec3 pointLight = pDiff * u_pointColor * atten * (u_mat > 0.5 ? finalColor * 1.5 : vec3(1.0));
 
       // Laser glow
       vec3 laserGlow = vec3(0.0);
@@ -1319,7 +1461,8 @@
       float edge = pow(abs(dot(N, vec3(0.0,1.0,0.0))), 0.35);
       float aoFactor = mix(0.7, 1.0, edge);
 
-      vec3 col = (ambient + diffuse + pointLight + laserGlow + enemyLaserGlow + balloonGlow + cubeGlow + bounce + 0.35*specular) * aoFactor;
+      vec3 col = (ambient + diffuse + pointLight + laserGlow + enemyLaserGlow + balloonGlow + cubeGlow + bounce + specK*specular) * aoFactor;
+      col += emis;
 
       // Distance fog with galaxy
       float fogDist = length(u_camPos - P);
@@ -1349,6 +1492,16 @@
   const locNMat  = gl.getUniformLocation(program, "u_nrmMat");
   const locColor = gl.getUniformLocation(program, "u_color");
   const locEmissive = gl.getUniformLocation(program, "u_emissive");
+  const locBloom = gl.getUniformLocation(program, "u_bloom");
+  const locGlowPass = gl.getUniformLocation(program, "u_glowPass");
+  const locMat = gl.getUniformLocation(program, "u_mat");
+  const locStyle = gl.getUniformLocation(program, "u_style");
+  const locThemeA = gl.getUniformLocation(program, "u_themeA");
+  const locThemeB = gl.getUniformLocation(program, "u_themeB");
+  const locFloorCol = gl.getUniformLocation(program, "u_floorCol");
+  const locTrim = gl.getUniformLocation(program, "u_trim");
+  const locTrimK = gl.getUniformLocation(program, "u_trimK");
+  const locTime = gl.getUniformLocation(program, "u_time");
   const locCam   = gl.getUniformLocation(program, "u_camPos");
   const locLD    = gl.getUniformLocation(program, "u_lightDir");
   const locLC    = gl.getUniformLocation(program, "u_lightColor");
@@ -1526,6 +1679,162 @@
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.CULL_FACE);
   gl.cullFace(gl.BACK);
+
+  // ---------- The level as one mesh ----------
+  // Every wall and floor tile used to be its own draw call (about a thousand a frame on the big levels). Now each
+  // level's walls and floors are built once into two buffers: only faces that can be seen (no wall face against
+  // another wall, no bottoms), in world coordinates, so the shader can lay its patterns over them.
+  const bufWallPos = gl.createBuffer(), bufWallNrm = gl.createBuffer(), bufFloorPos = gl.createBuffer(), bufFloorNrm = gl.createBuffer();
+  const IDENT4 = mat4Identity(), IDENT3 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+  function buildLevelMesh() {
+    const N = MAZE_SIZE, H = 1.3, FY = 0.04, wp = [], wn = [], fp = [], fn = [];
+    // two triangles a-b-c and a-c-d, counter-clockwise seen from the side the normal points to
+    const quad = (P, Nn, a, b, c, d, n) => { P.push(...a, ...b, ...c, ...a, ...c, ...d); for (let i = 0; i < 6; i++) Nn.push(n[0], n[1], n[2]); };
+    const wall = (x, z) => x >= 0 && z >= 0 && x < N && z < N && maze[z][x] === 1;
+    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+      if (maze[z][x] !== 1) { quad(fp, fn, [x, FY, z], [x, FY, z + 1], [x + 1, FY, z + 1], [x + 1, FY, z], [0, 1, 0]); continue; }
+      quad(wp, wn, [x, H, z], [x, H, z + 1], [x + 1, H, z + 1], [x + 1, H, z], [0, 1, 0]);
+      if (!wall(x + 1, z)) quad(wp, wn, [x + 1, 0, z], [x + 1, H, z], [x + 1, H, z + 1], [x + 1, 0, z + 1], [1, 0, 0]);
+      if (!wall(x - 1, z)) quad(wp, wn, [x, 0, z + 1], [x, H, z + 1], [x, H, z], [x, 0, z], [-1, 0, 0]);
+      if (!wall(x, z + 1)) quad(wp, wn, [x + 1, 0, z + 1], [x + 1, H, z + 1], [x, H, z + 1], [x, 0, z + 1], [0, 0, 1]);
+      if (!wall(x, z - 1)) quad(wp, wn, [x, 0, z], [x, H, z], [x + 1, H, z], [x + 1, 0, z], [0, 0, -1]);
+    }
+    const put = (buf, arr) => { gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW); };
+    put(bufWallPos, wp); put(bufWallNrm, wn); put(bufFloorPos, fp); put(bufFloorNrm, fn);
+    levelMesh = { walls: wp.length / 3, floors: fp.length / 3 };
+    meshDirty = false;
+  }
+  function drawLevel(proj, view, t) {
+    if (meshDirty || !levelMesh) buildLevelMesh();
+    const th = THEMES[currentLevel] || THEMES[1];
+    gl.uniformMatrix4fv(locMVP, false, mat4Mul(proj, view));
+    gl.uniformMatrix4fv(locModel, false, IDENT4);
+    gl.uniformMatrix3fv(locNMat, false, IDENT3);
+    gl.uniform1f(locEmissive, 0); gl.uniform1f(locBloom, 0); gl.uniform1f(locTime, t);
+    gl.uniform1f(locStyle, th.style); gl.uniform1f(locTrimK, th.trimK);
+    gl.uniform3fv(locThemeA, th.a); gl.uniform3fv(locThemeB, th.b); gl.uniform3fv(locFloorCol, th.floor); gl.uniform3fv(locTrim, th.trim);
+    gl.uniform3fv(locColor, th.a);
+    const draw = (posBuf, nrmBuf, count, mat) => {
+      gl.uniform1f(locMat, mat);
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf); gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, count);
+    };
+    draw(bufFloorPos, bufFloorNrm, levelMesh.floors, 2);
+    draw(bufWallPos, bufWallNrm, levelMesh.walls, 1);
+    gl.uniform1f(locMat, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm); gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+  }
+
+  // ---------- Bloom ----------
+  // What shines (lasers, the portal, the strips along the walls, lava, sparkles, a soft halo on balloons and cubes) is
+  // drawn again into an image a quarter of the screen's size, blurred, and added on top of the finished picture. The
+  // main picture still draws straight to the screen, so it keeps its smooth edges.
+  const quadVs = `
+    attribute vec2 a_pos;
+    varying vec2 v_uv;
+    void main(){ v_uv = a_pos * 0.5 + 0.5; gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+  const blurProg = link(compile(gl.VERTEX_SHADER, quadVs), compile(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    varying vec2 v_uv;
+    uniform sampler2D u_tex;
+    uniform vec2 u_step;
+    void main(){
+      vec3 c = texture2D(u_tex, v_uv).rgb * 0.227;
+      c += (texture2D(u_tex, v_uv + u_step * 1.385).rgb + texture2D(u_tex, v_uv - u_step * 1.385).rgb) * 0.316;
+      c += (texture2D(u_tex, v_uv + u_step * 3.231).rgb + texture2D(u_tex, v_uv - u_step * 3.231).rgb) * 0.070;
+      gl_FragColor = vec4(c, 1.0);
+    }`));
+  const addProg = link(compile(gl.VERTEX_SHADER, quadVs), compile(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    varying vec2 v_uv;
+    uniform sampler2D u_tex;
+    uniform float u_k;
+    void main(){ gl_FragColor = vec4(texture2D(u_tex, v_uv).rgb * u_k, 1.0); }`));
+  const blurLoc = { pos: gl.getAttribLocation(blurProg, "a_pos"), tex: gl.getUniformLocation(blurProg, "u_tex"), step: gl.getUniformLocation(blurProg, "u_step") };
+  const addLoc = { pos: gl.getAttribLocation(addProg, "a_pos"), tex: gl.getUniformLocation(addProg, "u_tex"), k: gl.getUniformLocation(addProg, "u_k") };
+  const bloom = { ok: false, w: 0, h: 0, glow: null, a: null, b: null };
+  let glowPass = false;
+  function makeTarget(w, h, depth) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    let rb = null;
+    if (depth) {
+      rb = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+    }
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fb, rb, ok };
+  }
+  function bloomReady() {
+    const w = Math.max(1, Math.ceil(canvas.width / 4)), h = Math.max(1, Math.ceil(canvas.height / 4));
+    if (bloom.w === w && bloom.h === h) return bloom.ok;
+    for (const k of ["glow", "a", "b"]) {
+      const old = bloom[k];
+      if (old) { gl.deleteTexture(old.tex); gl.deleteFramebuffer(old.fb); if (old.rb) gl.deleteRenderbuffer(old.rb); }
+    }
+    bloom.glow = makeTarget(w, h, true); bloom.a = makeTarget(w, h, false); bloom.b = makeTarget(w, h, false);
+    bloom.w = w; bloom.h = h; bloom.ok = bloom.glow.ok && bloom.a.ok && bloom.b.ok;
+    return bloom.ok;
+  }
+  function useQuad(prog, loc) {
+    gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
+    gl.enableVertexAttribArray(loc.pos);
+    gl.vertexAttribPointer(loc.pos, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(loc.tex, 0);
+  }
+  function blurInto(src, dst, sx, sy) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform2f(blurLoc.step, sx, sy);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+  // draw what shines into the small image and blur it; leaves the main program and the screen ready to draw on
+  function renderGlow(proj, view, t) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloom.glow.fb);
+    gl.viewport(0, 0, bloom.w, bloom.h);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    glowPass = true; gl.uniform1f(locGlowPass, 1);
+    drawScene(proj, view, t);
+    glowPass = false; gl.uniform1f(locGlowPass, 0);
+    gl.disable(gl.DEPTH_TEST);
+    useQuad(blurProg, blurLoc);
+    const sx = 1 / bloom.w, sy = 1 / bloom.h;
+    blurInto(bloom.glow, bloom.a, sx, 0); blurInto(bloom.a, bloom.b, 0, sy);
+    blurInto(bloom.b, bloom.a, sx * 2.5, 0); blurInto(bloom.a, bloom.b, 0, sy * 2.5);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.enable(gl.DEPTH_TEST);
+    gl.useProgram(program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.enableVertexAttribArray(locPos); gl.vertexAttribPointer(locPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm); gl.enableVertexAttribArray(locNrm); gl.vertexAttribPointer(locNrm, 3, gl.FLOAT, false, 0, 0);
+  }
+  function addGlow() {
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    useQuad(addProg, addLoc);
+    gl.bindTexture(gl.TEXTURE_2D, bloom.b.tex);
+    gl.uniform1f(addLoc.k, 1.15);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.disable(gl.BLEND);
+    gl.enable(gl.DEPTH_TEST);
+  }
 
   function collidesCircleWithWalls(x, z, r) {
     const minX = Math.floor(x - r) - 1;
@@ -2467,13 +2776,209 @@
     }
   }
 
-  function drawModel(proj, view, model, color, useSphere = false, useDiamond = false, emissive = 0) {
+  // everything in the world; drawn twice a frame when bloom is on: once into the glow image, once to the screen
+  function drawScene(proj, view, t) {
+    drawLevel(proj, view, t);
+
+    // balloons (smooth spheres, bobbing)
+    for (const b of balloons) {
+      if (!b.active) continue;
+      const spin = mat4RotateY(t*1.1*(gameOver ? 0.3 : 1));
+      const model = mat4Mul(mat4Translate(b.x, b.y, b.z), mat4Mul(spin, mat4Scale(0.28, 0.34, 0.28)));
+      const color = b.blue ? [0.2, 0.5, 1.0] : [1.0, 0.20, 0.20];
+      drawModel(proj, view, model, color, true, false, 0, 0.3);
+    }
+    
+    // diamonds (Level 3+)
+    if (currentLevel >= 3) {
+      for (const d of diamonds) {
+        if (!d.active) continue;
+        const model = mat4Mul(
+          mat4Translate(d.x, d.y, d.z),
+          mat4Mul(mat4RotateY(d.angle*(gameOver ? 0.3 : 1)), mat4Scale(0.3, 0.3, 0.3))
+        );
+        drawModel(proj, view, model, [0.7, 0.2, 0.8], false, true, 0, 0.35);
+      }
+    }
+    
+    // boss diamonds (Level 4+)
+    if (currentLevel >= 4) {
+      for (const boss of bossDiamonds) {
+        if (!boss.active) continue;
+        
+        const model = mat4Mul(
+          mat4Translate(boss.x, boss.y, boss.z),
+          mat4Mul(mat4RotateY(boss.angle*(gameOver ? 0.3 : 1)), mat4Scale(0.8, 0.8, 0.8))
+        );
+        const hitRatio = boss.hits / 6;
+        const color = [0.5 + hitRatio * 0.5, 0.5 - hitRatio * 0.3, 0.5 - hitRatio * 0.3];
+        drawModel(proj, view, model, color, false, true, 0, 0.5);
+      }
+    }
+
+    // floating cubes (small!)
+    for (const c of cubes) {
+      if (!c.active) continue;
+      const baseY = c.onWall ? 1.70 : 0.70;
+      const bob = baseY + Math.sin(t*3.0*(gameOver ? 0.3 : 1) + c.rot)*0.05;
+      const model = mat4Mul(
+        mat4Translate(c.x, bob, c.z),
+        mat4Mul(mat4RotateY(c.rot*(gameOver ? 0.3 : 1)), mat4Mul(mat4RotateX(-0.35), mat4Scale(0.18, 0.18, 0.18)))
+      );
+      let color = [0.25, 0.55, 1.00]; // Default blue
+      if (c.powerup === 'medkit') {
+        color = [1.0, 0.1, 0.1]; // Red for medkit
+      } else if (c.powerup === 'shields') {
+        color = [0.1, 1.0, 0.1]; // Green for shields
+      }
+      drawModel(proj, view, model, color, false, false, 0, 0.45);
+    }
+
+    // the exit portal: a pillar of light ringed by spinning shards
+    if (exitOpen) {
+      const pulse = 1 + 0.2 * Math.sin(t * 5);
+      drawModel(proj, view, mat4Mul(mat4Translate(PORTAL.x, 0.8, PORTAL.z), mat4Mul(mat4RotateY(t * 0.8), mat4Scale(0.14 * pulse, 1.6, 0.14 * pulse))), [0.45 * pulse, 1.0, 0.95], false, false, 0.9, 0.7);
+      drawModel(proj, view, mat4Mul(mat4Translate(PORTAL.x, 0.05, PORTAL.z), mat4Mul(mat4RotateY(-t), mat4Scale(0.7, 0.02, 0.7))), [0.2, 0.75 * pulse, 0.7 * pulse], false, false, 0.8, 0.8);
+      for (let i = 0; i < 10; i++) {
+        const ang = t * 1.7 + i * Math.PI * 2 / 10, y = 0.7 + Math.sin(t * 2.2 + i) * 0.3;
+        const m = mat4Mul(mat4Translate(PORTAL.x + Math.cos(ang) * 0.38, y, PORTAL.z + Math.sin(ang) * 0.38), mat4Mul(mat4RotateY(-ang), mat4Scale(0.07, 0.07, 0.07)));
+        drawModel(proj, view, m, [0.55, 1.0, 0.95], false, true, 0.75, 0.9);
+      }
+    }
+
+    // ladders (Level 2, 3, 5)
+    if (currentLevel >= 2 && (currentLevel === 2 || currentLevel === 3 || currentLevel === 5)) {
+      for (const l of ladders) {
+        const base = mat4Mul(mat4Translate(l.x, 0.65, l.z), mat4RotateY(l.yaw));
+        // Left rail (extended)
+        drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(-0.15, 0.1, 0), mat4Scale(0.04, 1.45, 0.04))), [0.95, 0.70, 0.25]);
+        // Right rail (extended)
+        drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(0.15, 0.1, 0), mat4Scale(0.04, 1.45, 0.04))), [0.95, 0.70, 0.25]);
+        // Rungs
+        for (let i = 0; i < 5; i++) {
+          const rungY = -0.5 + i * 0.25;
+          drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(0, rungY, 0), mat4Scale(0.3, 0.03, 0.03))), [0.95, 0.70, 0.25]);
+        }
+      }
+    }
+
+    // turrets (Level 5)
+    if (currentLevel === 5) {
+      for (const turret of turrets) {
+        const hitRatio = turret.hits / 3;
+        const baseColor = [0.3 + hitRatio * 0.4, 0.5 - hitRatio * 0.2, 0.3 - hitRatio * 0.1];
+        const topColor = [0.4 + hitRatio * 0.3, 0.6 - hitRatio * 0.3, 0.4 - hitRatio * 0.2];
+        
+        // Base platform (wider, flatter)
+        const baseModel = mat4Mul(mat4Translate(turret.x, turret.y - 0.15, turret.z), mat4Scale(0.5, 0.15, 0.5));
+        drawModel(proj, view, baseModel, baseColor);
+        
+        // Main body (taller, more defined)
+        const bodyModel = mat4Mul(mat4Translate(turret.x, turret.y + 0.05, turret.z), mat4Scale(0.3, 0.25, 0.3));
+        drawModel(proj, view, bodyModel, topColor);
+        
+        // Gun barrel (rotating)
+        const gunModel = mat4Mul(
+          mat4Translate(turret.x, turret.y + 0.2, turret.z),
+          mat4Mul(mat4RotateY(t * 1.5), mat4Scale(0.08, 0.08, 0.25))
+        );
+        drawModel(proj, view, gunModel, [0.2 + hitRatio * 0.3, 0.2, 0.2]);
+        
+        // Top sensor (spinning diamond)
+        const sensorModel = mat4Mul(
+          mat4Translate(turret.x, turret.y + 0.35, turret.z),
+          mat4Mul(mat4RotateY(t * 3), mat4Scale(0.12, 0.12, 0.12))
+        );
+        drawModel(proj, view, sensorModel, [0.8, 0.2 + hitRatio * 0.6, 0.2], false, true, 0.3, 0.8);
+      }
+    }
+    
+    // enemy lasers (red)
+    for (const l of enemyLasers) {
+      const len = Math.sqrt(l.dx*l.dx + l.dy*l.dy + l.dz*l.dz);
+      const dx = l.dx/len, dy = l.dy/len, dz = l.dz/len;
+      
+      const up = [0, 1, 0];
+      const right = [
+        up[1]*dz - up[2]*dy,
+        up[2]*dx - up[0]*dz,
+        up[0]*dy - up[1]*dx
+      ];
+      const rlen = Math.sqrt(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
+      if (rlen > 0.001) {
+        right[0]/=rlen; right[1]/=rlen; right[2]/=rlen;
+      }
+      const newUp = [
+        dy*right[2] - dz*right[1],
+        dz*right[0] - dx*right[2],
+        dx*right[1] - dy*right[0]
+      ];
+      
+      const rot = new Float32Array([
+        right[0], right[1], right[2], 0,
+        newUp[0], newUp[1], newUp[2], 0,
+        dx, dy, dz, 0,
+        0, 0, 0, 1
+      ]);
+      
+      const model = mat4Mul(mat4Translate(l.x, l.y, l.z), mat4Mul(rot, mat4Scale(0.08, 0.08, 0.35)));
+      drawModel(proj, view, model, [2.0, 0.4, 0.4], false, false, 1, 1.0);
+    }
+    // player lasers (oriented along travel direction)
+    for (const l of lasers) {
+      // Create rotation matrix to align laser with its direction
+      const len = Math.sqrt(l.dx*l.dx + l.dy*l.dy + l.dz*l.dz);
+      const dx = l.dx/len, dy = l.dy/len, dz = l.dz/len;
+      
+      // Build basis: forward = laser direction, up = world up, right = cross
+      const up = [0, 1, 0];
+      const right = [
+        up[1]*dz - up[2]*dy,
+        up[2]*dx - up[0]*dz,
+        up[0]*dy - up[1]*dx
+      ];
+      const rlen = Math.sqrt(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
+      if (rlen > 0.001) {
+        right[0]/=rlen; right[1]/=rlen; right[2]/=rlen;
+      }
+      const newUp = [
+        dy*right[2] - dz*right[1],
+        dz*right[0] - dx*right[2],
+        dx*right[1] - dy*right[0]
+      ];
+      
+      // Rotation matrix (column-major)
+      const rot = new Float32Array([
+        right[0], right[1], right[2], 0,
+        newUp[0], newUp[1], newUp[2], 0,
+        dx, dy, dz, 0,
+        0, 0, 0, 1
+      ]);
+      
+      const model = mat4Mul(mat4Translate(l.x, l.y, l.z), mat4Mul(rot, mat4Scale(0.06, 0.06, 0.22)));
+      drawModel(proj, view, model, [0.10, 1.00, 0.35], false, false, 1, 1.0);
+    }
+
+    // Particles (confetti with spark-like glow)
+    for (const p of particles) {
+      const fade = Math.min(1, p.life * 2);
+      const glow = Math.pow(fade, 0.5);
+      const color = [p.color[0]*glow*2, p.color[1]*glow*2, p.color[2]*glow*2];
+      const spin = mat4RotateY(p.spin * (2 - p.life));
+      const model = mat4Mul(mat4Translate(p.x, p.y, p.z), mat4Mul(spin, mat4Scale(p.size, p.size*0.3, p.size)));
+      drawModel(proj, view, model, color, false, false, 0.4, 0.7);
+    }
+  }
+
+  function drawModel(proj, view, model, color, useSphere = false, useDiamond = false, emissive = 0, bloomK = 0) {
+    if (glowPass && !(bloomK > 0)) return;
     const mvp = mat4Mul(proj, mat4Mul(view, model));
     gl.uniformMatrix4fv(locMVP, false, mvp);
     gl.uniformMatrix4fv(locModel, false, model);
     gl.uniformMatrix3fv(locNMat, false, normalMatrixFromModel(model));
     gl.uniform3f(locColor, color[0], color[1], color[2]);
     gl.uniform1f(locEmissive, emissive);
+    gl.uniform1f(locBloom, bloomK);
     
     if (useSphere) {
       gl.bindBuffer(gl.ARRAY_BUFFER, bufSpherePos);
@@ -2614,221 +3119,10 @@
     gl.uniform3fv(locCubePos, cubePositions);
     gl.uniform1i(locCubeCount, glowCount);
 
-    // floor (thin)
-    // (draw as scaled cube per cell, cheap and looks OK)
-    for (let z=0; z<MAZE_SIZE; z++){
-      for (let x=0; x<MAZE_SIZE; x++){
-        if (maze[z][x] !== 0) continue;
-        const model = mat4Mul(mat4Translate(x+0.5, 0.02, z+0.5), mat4Scale(1.0, 0.04, 1.0));
-        drawModel(proj, view, model, [0.18, 0.20, 0.26]);
-      }
-    }
-
-    // walls (taller for better maze vibe)
-    const wallColors = [
-      [0.50, 0.55, 0.62],
-      [0.40, 0.48, 0.56],
-      [0.52, 0.42, 0.58],
-      [0.55, 0.55, 0.55]
-    ];
-    const wallColor = wallColors[Math.min(currentLevel - 1, 3)];
-    
-    for (let z=0; z<MAZE_SIZE; z++){
-      for (let x=0; x<MAZE_SIZE; x++){
-        if (maze[z][x] !== 1) continue;
-        const model = mat4Mul(mat4Translate(x+0.5, 0.65, z+0.5), mat4Scale(1.0, 1.3, 1.0));
-        drawModel(proj, view, model, wallColor);
-      }
-    }
-
-    // balloons (smooth spheres, bobbing)
-    for (const b of balloons) {
-      if (!b.active) continue;
-      const spin = mat4RotateY(t*1.1*(gameOver ? 0.3 : 1));
-      const model = mat4Mul(mat4Translate(b.x, b.y, b.z), mat4Mul(spin, mat4Scale(0.28, 0.34, 0.28)));
-      const color = b.blue ? [0.2, 0.5, 1.0] : [1.0, 0.20, 0.20];
-      drawModel(proj, view, model, color, true);
-    }
-    
-    // diamonds (Level 3+)
-    if (currentLevel >= 3) {
-      for (const d of diamonds) {
-        if (!d.active) continue;
-        const model = mat4Mul(
-          mat4Translate(d.x, d.y, d.z),
-          mat4Mul(mat4RotateY(d.angle*(gameOver ? 0.3 : 1)), mat4Scale(0.3, 0.3, 0.3))
-        );
-        drawModel(proj, view, model, [0.7, 0.2, 0.8], false, true);
-      }
-    }
-    
-    // boss diamonds (Level 4+)
-    if (currentLevel >= 4) {
-      for (const boss of bossDiamonds) {
-        if (!boss.active) continue;
-        
-        const model = mat4Mul(
-          mat4Translate(boss.x, boss.y, boss.z),
-          mat4Mul(mat4RotateY(boss.angle*(gameOver ? 0.3 : 1)), mat4Scale(0.8, 0.8, 0.8))
-        );
-        const hitRatio = boss.hits / 6;
-        const color = [0.5 + hitRatio * 0.5, 0.5 - hitRatio * 0.3, 0.5 - hitRatio * 0.3];
-        drawModel(proj, view, model, color, false, true);
-      }
-    }
-
-    // floating cubes (small!)
-    for (const c of cubes) {
-      if (!c.active) continue;
-      const baseY = c.onWall ? 1.70 : 0.70;
-      const bob = baseY + Math.sin(t*3.0*(gameOver ? 0.3 : 1) + c.rot)*0.05;
-      const model = mat4Mul(
-        mat4Translate(c.x, bob, c.z),
-        mat4Mul(mat4RotateY(c.rot*(gameOver ? 0.3 : 1)), mat4Mul(mat4RotateX(-0.35), mat4Scale(0.18, 0.18, 0.18)))
-      );
-      let color = [0.25, 0.55, 1.00]; // Default blue
-      if (c.powerup === 'medkit') {
-        color = [1.0, 0.1, 0.1]; // Red for medkit
-      } else if (c.powerup === 'shields') {
-        color = [0.1, 1.0, 0.1]; // Green for shields
-      }
-      drawModel(proj, view, model, color);
-    }
-
-    // the exit portal: a pillar of light ringed by spinning shards
-    if (exitOpen) {
-      const pulse = 1 + 0.2 * Math.sin(t * 5);
-      drawModel(proj, view, mat4Mul(mat4Translate(PORTAL.x, 0.8, PORTAL.z), mat4Mul(mat4RotateY(t * 0.8), mat4Scale(0.14 * pulse, 1.6, 0.14 * pulse))), [0.45 * pulse, 1.0, 0.95], false, false, 0.9);
-      drawModel(proj, view, mat4Mul(mat4Translate(PORTAL.x, 0.05, PORTAL.z), mat4Mul(mat4RotateY(-t), mat4Scale(0.7, 0.02, 0.7))), [0.2, 0.75 * pulse, 0.7 * pulse], false, false, 0.8);
-      for (let i = 0; i < 10; i++) {
-        const ang = t * 1.7 + i * Math.PI * 2 / 10, y = 0.7 + Math.sin(t * 2.2 + i) * 0.3;
-        const m = mat4Mul(mat4Translate(PORTAL.x + Math.cos(ang) * 0.38, y, PORTAL.z + Math.sin(ang) * 0.38), mat4Mul(mat4RotateY(-ang), mat4Scale(0.07, 0.07, 0.07)));
-        drawModel(proj, view, m, [0.55, 1.0, 0.95], false, true, 0.75);
-      }
-    }
-
-    // ladders (Level 2, 3, 5)
-    if (currentLevel >= 2 && (currentLevel === 2 || currentLevel === 3 || currentLevel === 5)) {
-      for (const l of ladders) {
-        const base = mat4Mul(mat4Translate(l.x, 0.65, l.z), mat4RotateY(l.yaw));
-        // Left rail (extended)
-        drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(-0.15, 0.1, 0), mat4Scale(0.04, 1.45, 0.04))), [0.95, 0.70, 0.25]);
-        // Right rail (extended)
-        drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(0.15, 0.1, 0), mat4Scale(0.04, 1.45, 0.04))), [0.95, 0.70, 0.25]);
-        // Rungs
-        for (let i = 0; i < 5; i++) {
-          const rungY = -0.5 + i * 0.25;
-          drawModel(proj, view, mat4Mul(base, mat4Mul(mat4Translate(0, rungY, 0), mat4Scale(0.3, 0.03, 0.03))), [0.95, 0.70, 0.25]);
-        }
-      }
-    }
-
-    // turrets (Level 5)
-    if (currentLevel === 5) {
-      for (const turret of turrets) {
-        const hitRatio = turret.hits / 3;
-        const baseColor = [0.3 + hitRatio * 0.4, 0.5 - hitRatio * 0.2, 0.3 - hitRatio * 0.1];
-        const topColor = [0.4 + hitRatio * 0.3, 0.6 - hitRatio * 0.3, 0.4 - hitRatio * 0.2];
-        
-        // Base platform (wider, flatter)
-        const baseModel = mat4Mul(mat4Translate(turret.x, turret.y - 0.15, turret.z), mat4Scale(0.5, 0.15, 0.5));
-        drawModel(proj, view, baseModel, baseColor);
-        
-        // Main body (taller, more defined)
-        const bodyModel = mat4Mul(mat4Translate(turret.x, turret.y + 0.05, turret.z), mat4Scale(0.3, 0.25, 0.3));
-        drawModel(proj, view, bodyModel, topColor);
-        
-        // Gun barrel (rotating)
-        const gunModel = mat4Mul(
-          mat4Translate(turret.x, turret.y + 0.2, turret.z),
-          mat4Mul(mat4RotateY(t * 1.5), mat4Scale(0.08, 0.08, 0.25))
-        );
-        drawModel(proj, view, gunModel, [0.2 + hitRatio * 0.3, 0.2, 0.2]);
-        
-        // Top sensor (spinning diamond)
-        const sensorModel = mat4Mul(
-          mat4Translate(turret.x, turret.y + 0.35, turret.z),
-          mat4Mul(mat4RotateY(t * 3), mat4Scale(0.12, 0.12, 0.12))
-        );
-        drawModel(proj, view, sensorModel, [0.8, 0.2 + hitRatio * 0.6, 0.2], false, true);
-      }
-    }
-    
-    // enemy lasers (red)
-    for (const l of enemyLasers) {
-      const len = Math.sqrt(l.dx*l.dx + l.dy*l.dy + l.dz*l.dz);
-      const dx = l.dx/len, dy = l.dy/len, dz = l.dz/len;
-      
-      const up = [0, 1, 0];
-      const right = [
-        up[1]*dz - up[2]*dy,
-        up[2]*dx - up[0]*dz,
-        up[0]*dy - up[1]*dx
-      ];
-      const rlen = Math.sqrt(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
-      if (rlen > 0.001) {
-        right[0]/=rlen; right[1]/=rlen; right[2]/=rlen;
-      }
-      const newUp = [
-        dy*right[2] - dz*right[1],
-        dz*right[0] - dx*right[2],
-        dx*right[1] - dy*right[0]
-      ];
-      
-      const rot = new Float32Array([
-        right[0], right[1], right[2], 0,
-        newUp[0], newUp[1], newUp[2], 0,
-        dx, dy, dz, 0,
-        0, 0, 0, 1
-      ]);
-      
-      const model = mat4Mul(mat4Translate(l.x, l.y, l.z), mat4Mul(rot, mat4Scale(0.08, 0.08, 0.35)));
-      drawModel(proj, view, model, [2.0, 0.4, 0.4]);
-    }
-    // player lasers (oriented along travel direction)
-    for (const l of lasers) {
-      // Create rotation matrix to align laser with its direction
-      const len = Math.sqrt(l.dx*l.dx + l.dy*l.dy + l.dz*l.dz);
-      const dx = l.dx/len, dy = l.dy/len, dz = l.dz/len;
-      
-      // Build basis: forward = laser direction, up = world up, right = cross
-      const up = [0, 1, 0];
-      const right = [
-        up[1]*dz - up[2]*dy,
-        up[2]*dx - up[0]*dz,
-        up[0]*dy - up[1]*dx
-      ];
-      const rlen = Math.sqrt(right[0]*right[0] + right[1]*right[1] + right[2]*right[2]);
-      if (rlen > 0.001) {
-        right[0]/=rlen; right[1]/=rlen; right[2]/=rlen;
-      }
-      const newUp = [
-        dy*right[2] - dz*right[1],
-        dz*right[0] - dx*right[2],
-        dx*right[1] - dy*right[0]
-      ];
-      
-      // Rotation matrix (column-major)
-      const rot = new Float32Array([
-        right[0], right[1], right[2], 0,
-        newUp[0], newUp[1], newUp[2], 0,
-        dx, dy, dz, 0,
-        0, 0, 0, 1
-      ]);
-      
-      const model = mat4Mul(mat4Translate(l.x, l.y, l.z), mat4Mul(rot, mat4Scale(0.06, 0.06, 0.22)));
-      drawModel(proj, view, model, [0.10, 1.00, 0.35]);
-    }
-
-    // Particles (confetti with spark-like glow)
-    for (const p of particles) {
-      const fade = Math.min(1, p.life * 2);
-      const glow = Math.pow(fade, 0.5);
-      const color = [p.color[0]*glow*2, p.color[1]*glow*2, p.color[2]*glow*2];
-      const spin = mat4RotateY(p.spin * (2 - p.life));
-      const model = mat4Mul(mat4Translate(p.x, p.y, p.z), mat4Mul(spin, mat4Scale(p.size, p.size*0.3, p.size)));
-      drawModel(proj, view, model, color);
-    }
+    const bloomOn = bloomReady();
+    if (bloomOn) renderGlow(proj, view, t);
+    drawScene(proj, view, t);
+    if (bloomOn) addGlow();
 
     drawRadar(t);
     requestAnimationFrame(frame);
