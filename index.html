@@ -478,6 +478,39 @@
   // Place items on empty cells, but not too close to start
   function farEnough(x,z) { return Math.hypot(x-1.5, z-1.5) > 2.5; }
 
+  // The nearest ladder within reach. Two ladders can face each other across a corridor, and taking the first one in
+  // the list could turn you around and send you up the one behind you.
+  function ladderNear(reach) {
+    let best = null, bestD = reach;
+    for (const l of ladders) {
+      const d = Math.hypot(camera.x - l.x, camera.z - l.z);
+      if (d < bestD) { bestD = d; best = l; }
+    }
+    return best;
+  }
+
+  // Numbers each separate stretch of wall top. Cells join side by side, the same way you can walk between them.
+  // Returns the stretch for every cell (-1 for floor) and how many there are.
+  function wallRegions() {
+    const N = MAZE_SIZE, region = new Int32Array(N * N).fill(-1);
+    let count = 0;
+    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+      if (maze[z][x] !== 1 || region[z * N + x] >= 0) continue;
+      const stack = [z * N + x];
+      region[z * N + x] = count;
+      while (stack.length) {
+        const i = stack.pop(), cx = i % N, cz = (i - cx) / N;
+        for (const [nx, nz] of [[cx + 1, cz], [cx - 1, cz], [cx, cz + 1], [cx, cz - 1]]) {
+          if (nx < 0 || nz < 0 || nx >= N || nz >= N || maze[nz][nx] !== 1 || region[nz * N + nx] >= 0) continue;
+          region[nz * N + nx] = count;
+          stack.push(nz * N + nx);
+        }
+      }
+      count++;
+    }
+    return { region, count };
+  }
+
   const balloonsEl = document.getElementById("balloons");
   const cubesEl = document.getElementById("cubes");
   const levelEl = document.getElementById("level");
@@ -604,6 +637,7 @@
     gameOverEl.style.display = "none";
     canvas.classList.remove("grayscale");
     
+    const topReach = new Uint8Array(MAZE_SIZE * MAZE_SIZE);  // wall-top cells you can climb onto
     if (currentLevel >= 2 && (currentLevel === 2 || currentLevel === 3 || currentLevel === 5)) {
       // Place ladders on walls (Level 2, 3, 5)
       const FACE_OFFSET = 0.51;
@@ -635,6 +669,32 @@
           });
         }
       }
+
+      // The loops knock walls out, which cuts stretches of wall top off from the rest, and the random ladders above
+      // can miss a stretch entirely. Give each stretch without a ladder one of its own, so nothing up there is out
+      // of reach.
+      const N = MAZE_SIZE, { region, count } = wallRegions();
+      const wallOf = l => Math.floor(l.z + Math.cos(l.yaw) * 0.3) * N + Math.floor(l.x + Math.sin(l.yaw) * 0.3);
+      const served = new Uint8Array(count);
+      for (const l of ladders) served[region[wallOf(l)]] = 1;
+      const spots = Array.from({ length: count }, () => []);
+      for (let z = 1; z < N - 1; z++) for (let x = 1; x < N - 1; x++) {
+        const r = region[z * N + x];
+        if (r < 0 || served[r]) continue;
+        if (maze[z][x - 1] === 0) spots[r].push({ x, z, ox: -FACE_OFFSET, yaw: Math.PI / 2 });
+        if (maze[z][x + 1] === 0) spots[r].push({ x, z, ox: FACE_OFFSET, yaw: -Math.PI / 2 });
+      }
+      for (let r = 0; r < count; r++) {
+        if (served[r] || !spots[r].length) continue;
+        // Rather away from the start and not beside another ladder, but any spot beats none.
+        const nice = spots[r].filter(o => farEnough(o.x + 0.5, o.z + 0.5) &&
+          !ladders.some(l => { const w = wallOf(l), wx = w % N; return Math.abs(wx - o.x) + Math.abs((w - wx) / N - o.z) === 1; }));
+        const pool = nice.length ? nice : spots[r];
+        const o = pool[(Math.random() * pool.length) | 0];
+        ladders.push({ x: o.x + 0.5 + o.ox, z: o.z + 0.5, yaw: o.yaw });
+        served[r] = 1;
+      }
+      for (let i = 0; i < N * N; i++) topReach[i] = region[i] >= 0 && served[region[i]] ? 1 : 0;
     }
     
     // Place collectibles (ground level)
@@ -696,7 +756,7 @@
       // Place collectibles on wall tops (Level 2, 3, 5)
       for (let z=0; z<MAZE_SIZE; z++) {
         for (let x=0; x<MAZE_SIZE; x++) {
-          if (maze[z][x] !== 1) continue;
+          if (maze[z][x] !== 1 || !topReach[z * MAZE_SIZE + x]) continue;
           const px = x + 0.5, pz = z + 0.5;
           if (!farEnough(px,pz)) continue;
           const r = Math.random();
@@ -802,7 +862,7 @@
       // Wall collectibles
       for (let z=0; z<MAZE_SIZE; z++) {
         for (let x=0; x<MAZE_SIZE; x++) {
-          if (maze[z][x] !== 1) continue;
+          if (maze[z][x] !== 1 || !topReach[z * MAZE_SIZE + x]) continue;
           const px = x + 0.5, pz = z + 0.5;
           if (!farEnough(px,pz)) continue;
           const r = Math.random();
@@ -2018,7 +2078,7 @@
     
     // Ladder debug info
     const LADDER_RADIUS = 0.65;
-    const nearLadder = currentLevel >= 2 ? ladders.find(l => Math.hypot(camera.x - l.x, camera.z - l.z) < LADDER_RADIUS) : null;
+    const nearLadder = currentLevel >= 2 ? ladderNear(LADDER_RADIUS) : null;
     let ladderDist = 'N/A';
     let ladderDir = 'N/A';
     if (nearLadder) {
@@ -2207,9 +2267,7 @@
 
     // --- Ladder interaction (Level 2+) ---
     const LADDER_RADIUS = 0.65;
-    const nearLadder = (currentLevel >= 2)
-      ? ladders.find(l => Math.hypot(camera.x - l.x, camera.z - l.z) < LADDER_RADIUS)
-      : null;
+    const nearLadder = currentLevel >= 2 ? ladderNear(LADDER_RADIUS) : null;
 
     const wantMount = nearLadder && !onWallTop && (keys["KeyW"] && camera.pitch > 0.8);
     const wantDismountDown = nearLadder && onWallTop && (keys["KeyS"] && camera.pitch < -0.8);
