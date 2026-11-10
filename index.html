@@ -513,7 +513,7 @@
     if (currentLevel >= 3) {
       const medkitIcon = medkits > 0 ? ` +${medkits}` : '';
       const shieldIcon = shields > 0 ? ` 🟢${shields}` : '';
-      livesEl.innerHTML = "Lives: " + "❤".repeat(lives) + medkitIcon + '<span style="color: #0f0;">' + shieldIcon + '</span>';
+      livesEl.innerHTML = "Lives: " + "❤".repeat(Math.max(0, lives)) + medkitIcon + '<span style="color: #0f0;">' + shieldIcon + '</span>';
     }
   }
   
@@ -548,6 +548,8 @@
     ladders.length = 0;
     camera.x = 1.5; camera.y = 0.65; camera.z = 1.5; camera.pitch = 0;
     onWallTop = false;
+    // Dying mid-climb and pressing R used to keep the old maze's ladder, pulling you onto an invisible one.
+    ladderState.mode = "none"; ladderState.ladder = null; ladderState.t = 0;
     
     // Find initial yaw that faces open space
     const angles = [0, Math.PI/2, Math.PI, -Math.PI/2];
@@ -1857,6 +1859,41 @@
     return false;
   }
 
+  // Moves a circle at (x, z) out of any wall it overlaps and returns the new [x, z]. Ground collision refuses
+  // every step that still overlaps a wall, even a step away from it, so a player left overlapping one is stuck.
+  function pushOutOfWalls(x, z, r) {
+    const solid = (mx, mz) => mx < 0 || mz < 0 || mx >= MAZE_SIZE || mz >= MAZE_SIZE || maze[mz][mx] !== 0;
+    let cx = Math.floor(x), cz = Math.floor(z);
+    if (solid(cx, cz)) {
+      // Standing inside a wall: go to the middle of the nearest open cell.
+      let best = null, bestD = Infinity;
+      for (let mz = cz - 2; mz <= cz + 2; mz++) for (let mx = cx - 2; mx <= cx + 2; mx++) {
+        if (solid(mx, mz)) continue;
+        const d = Math.hypot(mx + 0.5 - x, mz + 0.5 - z);
+        if (d < bestD) { bestD = d; best = [mx + 0.5, mz + 0.5]; }
+      }
+      if (!best) return [x, z];
+      [x, z] = best; cx = Math.floor(x); cz = Math.floor(z);
+    }
+    for (let pass = 0; pass < 3; pass++) {
+      let moved = false;
+      for (let mz = cz - 1; mz <= cz + 1; mz++) for (let mx = cx - 1; mx <= cx + 1; mx++) {
+        if (!solid(mx, mz)) continue;
+        let dx = x - Math.max(mx, Math.min(x, mx + 1)), dz = z - Math.max(mz, Math.min(z, mz + 1));
+        const d = Math.hypot(dx, dz);
+        if (d >= r) continue;
+        if (d > 0) { dx /= d; dz /= d; }
+        else {  // exactly on the wall's edge: push straight out of its nearest side
+          const ex = x - mx - 0.5, ez = z - mz - 0.5;
+          [dx, dz] = Math.abs(ex) >= Math.abs(ez) ? [Math.sign(ex) || 1, 0] : [0, Math.sign(ez) || 1];
+        }
+        x += dx * (r + 0.002 - d); z += dz * (r + 0.002 - d); moved = true;
+      }
+      if (!moved) break;
+    }
+    return [x, z];
+  }
+
   function markSeen() {
     const cx = Math.floor(camera.x), cz = Math.floor(camera.z), N = MAZE_SIZE;
     const mark = (x, z) => { if (x >= 0 && z >= 0 && x < N && z < N) seen[z * N + x] = 1; };
@@ -2316,9 +2353,10 @@
       const isOnWall = mx >= 0 && mz >= 0 && mx < MAZE_SIZE && mz < MAZE_SIZE && maze[mz][mx] === 1;
       
       if (!isOnWall) {
-        // Falling off wall
+        // Falling off wall. You leave the wall top right at its edge, so step clear of it as you land.
         camera.y = 0.65;
         onWallTop = false;
+        [camera.x, camera.z] = pushOutOfWalls(camera.x, camera.z, radius);
       } else {
         // Move on wall top
         const nmx = Math.floor(nx), nmz = Math.floor(nz);
@@ -2330,6 +2368,7 @@
       }
     } else {
       // Ground level movement with substep collision
+      if (collidesCircleWithWalls(camera.x, camera.z, radius)) [camera.x, camera.z] = pushOutOfWalls(camera.x, camera.z, radius);
       let remaining = step;
       const maxStep = 0.08;
 
